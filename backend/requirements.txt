@@ -1,0 +1,7 @@
+Flask
+Flask-CORS
+python-ldap3
+requests
+python-dotenv
+schedule
+pytz

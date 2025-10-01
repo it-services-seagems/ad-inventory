@@ -1,0 +1,21 @@
+Busca por service tag: C1WSB92
+Data/Hora: 2025-06-17 08:46:26
+
+Servidor: ESMDC02
+Status: nao_encontrado
+--------------------------------------------------
+Servidor: JADDC02
+Status: nao_encontrado
+--------------------------------------------------
+Servidor: RUBDC02
+Status: nao_encontrado
+--------------------------------------------------
+Servidor: DIADC02
+Status: nao_encontrado
+--------------------------------------------------
+Servidor: TOPDC02
+Status: nao_encontrado
+--------------------------------------------------
+Servidor: ONIDC02
+Status: nao_encontrado
+--------------------------------------------------
