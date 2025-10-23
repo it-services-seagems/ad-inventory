@@ -1,7 +1,7 @@
 import requests
 import json
 
-URL = 'http://10.15.3.30:42057/api/warranty/bulk-refresh'
+URL = 'http://10.15.3.30:42059/api/warranty/bulk-refresh'
 headers = {'Content-Type': 'application/json'}
 payload = {'service_tags': ['SHQH2Z1ZP3']}
 

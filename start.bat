@@ -2,10 +2,10 @@
 setlocal enabledelayedexpansion
 
 REM === Cleanup ===
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr :42057 ^| findstr LISTENING') do (
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :42059 ^| findstr LISTENING') do (
     taskkill /F /PID %%a 2>nul
 )
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr :42056 ^| findstr LISTENING') do (
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :42058 ^| findstr LISTENING') do (
     taskkill /F /PID %%a 2>nul
 )
 

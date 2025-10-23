@@ -1,0 +1,18 @@
+Metadata-Version: 2.1
+Name: KlAkOAPI
+Version: 1.0.0.0
+Summary: Wrapper library for interacting Kaspersky Security Center (aka KSC) server with KSC Open API
+Home-page: http://kaspersky.com
+Author: Kaspersky Lab
+License: LICENSE
+Description: KlAkOAPI Library
+        ------------------
+        
+        KlAkOAPI is a wrapper library for interacting Kaspersky Security Center (aka KSC) server with KSC Open API
+        For detailed description of KSC Open API protocol please refer to KLOAPI documentation pages
+Platform: UNKNOWN
+Classifier: Programming Language :: Python :: 3
+Classifier: Operating System :: OS Independent
+Classifier: License :: OSI Approved :: Apache Software License 2.0 (Apache-2.0)
+Requires-Python: >=3.6
+Description-Content-Type: text/markdown

@@ -1,0 +1,21 @@
+#! /usr/bin/python -tt
+
+from .Base import KlAkBase
+from .Params import KlAkParamsEncoder
+import json
+
+class KlAkCgwHelper (KlAkBase):
+    def __init__(self, server, instance = ''):
+        self.server = server
+        self.instance = instance
+
+    def GetSlaveServerLocation(self, nSlaveServerId):
+        data = {'nSlaveServerId': nSlaveServerId}
+        response = self.server.session.post(url = self.server.Call((lambda: self.instance + '.' if self.instance != None and self.instance != '' else '')() + 'CgwHelper.GetSlaveServerLocation'), headers = KlAkBase.common_headers, data = json.dumps(data, cls = KlAkParamsEncoder))
+        return self.ParseResponse(response.status_code, response.text)
+
+    def GetNagentLocation(self, wsHostName):
+        data = {'wsHostName': wsHostName}
+        response = self.server.session.post(url = self.server.Call((lambda: self.instance + '.' if self.instance != None and self.instance != '' else '')() + 'CgwHelper.GetNagentLocation'), headers = KlAkBase.common_headers, data = json.dumps(data, cls = KlAkParamsEncoder))
+        return self.ParseResponse(response.status_code, response.text)
+
