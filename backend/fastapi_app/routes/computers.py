@@ -41,16 +41,18 @@ def computer_details(computer_name: str):
             c.user_account_control,
             c.primary_group_id,
             c.last_sync_ad,
-            c.ip_address,
-            c.mac_address,
+            c.Usuario_Atual as usuario_atual,
+            c.Usuario_Anterior as usuario_anterior,
+            c.Status as inventory_status,
+            c.location,
             o.name as organization_name,
             o.code as organization_code,
             os.name as os,
             os.version as osVersion
         FROM computers c
         LEFT JOIN organizations o ON c.organization_id = o.id
-    LEFT JOIN operating_systems os ON c.operating_system_id = os.id
-    WHERE c.name = ?"""
+        LEFT JOIN operating_systems os ON c.operating_system_id = os.id
+        WHERE c.name = ?"""
         rows = sql_manager.execute_query(q, params=(computer_name,))
         if rows:
             # Format the result similar to Flask route
@@ -773,4 +775,45 @@ def bulk_update_current_users():
         return JSONResponse(content={
             'status': 'error',
             'message': str(e)
+        }, status_code=500)
+
+
+@computers_router.get('/user-by-service-tag/{service_tag}')
+def get_user_by_service_tag(service_tag: str):
+    """Busca o usuário atual de uma máquina usando o service tag"""
+    try:
+        if not service_tag or not service_tag.strip():
+            raise HTTPException(status_code=400, detail='Service tag é obrigatório')
+        
+        # Usar o método do SQL manager para buscar o usuário
+        result = sql_manager.get_current_user_by_service_tag(service_tag.strip())
+        
+        if result.get('found'):
+            return JSONResponse(content={
+                'success': True,
+                'service_tag': service_tag,
+                'computer_name': result.get('computer_name'),
+                'usuario_atual': result.get('usuario_atual'),
+                'usuario_anterior': result.get('usuario_anterior'),
+                'description': result.get('description'),
+                'last_logon': result.get('last_logon').isoformat() if result.get('last_logon') else None,
+                'message': 'Usuário encontrado com sucesso'
+            })
+        else:
+            return JSONResponse(content={
+                'success': False,
+                'service_tag': service_tag,
+                'usuario_atual': None,
+                'message': result.get('message', 'Máquina não encontrada'),
+                'error': result.get('error')
+            }, status_code=404)
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(content={
+            'success': False,
+            'service_tag': service_tag,
+            'usuario_atual': None,
+            'message': f'Erro interno: {str(e)}'
         }, status_code=500)

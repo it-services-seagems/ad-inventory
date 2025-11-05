@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Monitor, Calendar, Shield, RefreshCw, AlertTriangle, ShieldOff, ShieldAlert, Network, Server, Search, MapPin, CheckCircle } from 'lucide-react'
-import api from '../services/api'
+import api, { apiMethods } from '../services/api'
+import { useToast } from '../components/Toast'
+import ConfirmationModal from '../components/ConfirmationModal'
 
 
 const ComputerDetail = () => {
@@ -20,13 +22,43 @@ const ComputerDetail = () => {
   
   // Estados para atribuição de usuário
   const [showUserAssignModal, setShowUserAssignModal] = useState(false)
-  const [availableUsers, setAvailableUsers] = useState([])
+  // Removido: availableUsers não é mais usado (apenas sistema Corpore)
   const [selectedUser, setSelectedUser] = useState(null)
   const [userSearchTerm, setUserSearchTerm] = useState('')
   const [assignmentLoading, setAssignmentLoading] = useState(false)
+  
+  // Estados para funcionários do Corpore
+  const [funcionarios, setFuncionarios] = useState([])
+  const [funcionariosLoading, setFuncionariosLoading] = useState(false)
+  const [selectedSource, setSelectedSource] = useState('corpore') // apenas 'corpore'
+  
+  // Estados para toasts e confirmação
+  const { showToast, ToastContainer } = useToast()
+  const [confirmModal, setConfirmModal] = useState({ 
+    isOpen: false, 
+    type: 'warning', 
+    title: '', 
+    message: '', 
+    onConfirm: null 
+  })
+  const [pageReloading, setPageReloading] = useState(false)
 
   useEffect(() => {
     fetchComputerData()
+    
+    // Verificar se há mensagem de toast salva após reload
+    const savedMessage = sessionStorage.getItem('toast_message')
+    const savedType = sessionStorage.getItem('toast_type')
+    
+    if (savedMessage) {
+      // Pequeno delay para garantir que a página carregou completamente
+      setTimeout(() => {
+        showToast(savedMessage, savedType || 'success')
+        // Limpar do sessionStorage
+        sessionStorage.removeItem('toast_message')
+        sessionStorage.removeItem('toast_type')
+      }, 500)
+    }
   }, [computerName])
 
   const fetchComputerData = async () => {
@@ -63,6 +95,22 @@ const ComputerDetail = () => {
             normalized.mac = normalized.mac_address || normalized.macAddress || normalized.physical_mac || null
           }
 
+          // User fields normalization
+          if (!normalized.currentUser) {
+            normalized.currentUser = normalized.usuario_atual || normalized.usuarioAtual || null
+          }
+          if (!normalized.previousUser) {
+            normalized.previousUser = normalized.usuario_anterior || normalized.usuarioAnterior || null
+          }
+
+          // Inventory and location normalization
+          if (!normalized.inventoryStatus) {
+            normalized.inventoryStatus = normalized.inventory_status || normalized.status || null
+          }
+          if (!normalized.location) {
+            normalized.location = normalized.location || null
+          }
+
           // Apply the normalized object to state so rest of UI can use consistent keys
           setComputer(normalized)
         } catch (e) {
@@ -72,7 +120,10 @@ const ComputerDetail = () => {
         // Não buscar garantia automaticamente - usar cache do SQL por padrão
         fetchDHCPInfo()
         fetchLastUserInfo()
-        fetchCurrentUser()
+        // Só buscar usuário atual via PowerShell se não houver dados no SQL
+        if (!normalized.currentUser || normalized.currentUser.trim() === '') {
+          fetchCurrentUser()
+        }
         try {
           fetchWarrantyInfo(false)
         } catch (err) {
@@ -242,7 +293,23 @@ const ComputerDetail = () => {
   const fetchDHCPInfo = async () => {
     try {
       setDhcpLoading(true)
-      console.log(`🔍 Buscando informações DHCP para: ${computerName}`)
+      console.log(`🔍 Buscando informações de rede para: ${computerName}`)
+
+      // Verificar se é computador SHQ (onshore)
+      const isShqComputer = computerName.toUpperCase().startsWith('SHQ')
+      
+      if (isShqComputer) {
+        console.log(`🏢 Computador SHQ identificado - definindo como onshore`)
+        setDhcpInfo({
+          dhcp_server: 'Onshore Network',
+          location: 'Sede - Rio de Janeiro',
+          network_type: 'onshore',
+          mac_address: computer?.mac || 'N/A',
+          ip_address: 'DHCP Automático',
+          status: 'onshore'
+        })
+        return
+      }
 
       // Extrair prefixo do nome da máquina para identificar o navio
       const shipPrefix = getShipFromComputerName(computerName)
@@ -451,89 +518,155 @@ const ComputerDetail = () => {
     return null
   }
 
-  // Funções para atribuição de usuário
-  const fetchAvailableUsers = async () => {
-    try {
-      // Simulated API call - implementar endpoint real posteriormente
-      const mockUsers = [
-        { id: 1, name: 'João Silva', email: 'joao.silva@empresa.com', position: 'Analista', base: 'SHQ' },
-        { id: 2, name: 'Maria Santos', email: 'maria.santos@empresa.com', position: 'Coordenadora', base: 'DIAMANTE' },
-        { id: 3, name: 'Pedro Costa', email: 'pedro.costa@empresa.com', position: 'Técnico', base: 'ESMERALDA' }
-      ]
-      setAvailableUsers(mockUsers)
-    } catch (error) {
-      console.error('Erro ao buscar usuários:', error)
-      setAvailableUsers([])
-    }
-  }
+  // Função de atribuição de usuário (apenas sistema Corpore)
 
-  const handleAssignUser = async () => {
+  const handleAssignUser = () => {
     if (!selectedUser) return
 
+    // Validar email corporativo antes de mostrar confirmação
+    const email = selectedUser.email_corporativo || selectedUser.email
+    if (!email) {
+      showToast('Funcionário não possui email corporativo cadastrado', 'error')
+      return
+    }
+
+    const emailLower = email.toLowerCase()
+    if (!emailLower.includes('@seagems') && !emailLower.includes('@sapura')) {
+      showToast('Email deve ser do domínio @seagems ou @sapura', 'error')
+      return
+    }
+
+    // Mostrar confirmação antes de vincular
+    setConfirmModal({
+      isOpen: true,
+      type: 'info',
+      title: 'Confirmar Vinculação',
+      message: `Deseja vincular o funcionário "${selectedUser.name}" ao computador "${computerName}"?`,
+      onConfirm: () => confirmAssignUser()
+    })
+  }
+
+  const confirmAssignUser = async () => {
     try {
       setAssignmentLoading(true)
+      setConfirmModal(prev => ({ ...prev, isOpen: false }))
       
-      // Simulated API call for user assignment
-      console.log('Atribuindo usuário:', selectedUser, 'à máquina:', computerName)
+      console.log('🔗 Vinculando usuário:', selectedUser, 'à máquina:', computerName)
       
-      // TODO: Implementar chamada real da API
-      // await api.post(`/computers/${computerName}/assign-user`, {
-      //   user_id: selectedUser.id,
-      //   user_email: selectedUser.email
-      // })
-
-      // Simulated email sending for term of receipt
-      console.log('Enviando email com termo de recebimento para:', selectedUser.email)
+      // Chamar API de vinculação
+      const result = await apiMethods.vincularUsuario(computerName, selectedUser)
       
-      // Update computer data locally
-      setComputer(prev => ({
-        ...prev,
-        currentUser: selectedUser.name,
-        currentUserEmail: selectedUser.email
-      }))
-
-      // Close modal and show success message
+      console.log('✅ Usuário vinculado com sucesso:', result)
+      
+      // Fechar modal e limpar seleção
       setShowUserAssignModal(false)
       setSelectedUser(null)
+      setUserSearchTerm('')
       
-      alert(`Usuário ${selectedUser.name} atribuído com sucesso! Email com termo de recebimento será enviado para ${selectedUser.email}`)
+      // Salvar mensagem no sessionStorage para mostrar após reload
+      sessionStorage.setItem('toast_message', `Usuário ${selectedUser.name} vinculado com sucesso ao computador ${computerName}!`)
+      sessionStorage.setItem('toast_type', 'success')
+      
+      // Ativar loading e recarregar imediatamente
+      setPageReloading(true)
+      window.location.reload()
       
     } catch (error) {
-      console.error('Erro ao atribuir usuário:', error)
-      alert('Erro ao atribuir usuário. Tente novamente.')
+      console.error('❌ Erro ao vincular usuário:', error)
+      const errorMessage = error.response?.data?.detail || error.message || 'Erro desconhecido'
+      
+      // Tratar erros específicos de validação
+      if (errorMessage.includes('Email deve ser do domínio')) {
+        showToast('O funcionário deve ter email corporativo @seagems ou @sapura', 'error')
+      } else if (errorMessage.includes('Email corporativo é obrigatório')) {
+        showToast('Funcionário não possui email corporativo cadastrado', 'error')
+      } else {
+        showToast(`Erro ao vincular usuário: ${errorMessage}`, 'error')
+      }
     } finally {
       setAssignmentLoading(false)
     }
   }
 
-  const handleUnassignUser = async () => {
+  const handleUnassignUser = () => {
+    // Mostrar confirmação antes de desvincular
+    setConfirmModal({
+      isOpen: true,
+      type: 'danger',
+      title: 'Confirmar Desvinculação',
+      message: `Deseja desvincular o usuário atual do computador "${computerName}"? Esta ação não pode ser desfeita.`,
+      onConfirm: () => confirmUnassignUser()
+    })
+  }
+
+  const confirmUnassignUser = async () => {
     try {
       setAssignmentLoading(true)
+      setConfirmModal(prev => ({ ...prev, isOpen: false }))
       
-      // TODO: Implementar chamada real da API
-      // await api.post(`/computers/${computerName}/unassign-user`)
-
-      // Update computer data locally
-      setComputer(prev => ({
-        ...prev,
-        currentUser: null,
-        currentUserEmail: null,
-        previousUser: prev.currentUser
-      }))
-
-      alert('Usuário desvinculado com sucesso!')
+      console.log('🔗 Desvinculando usuário do computador:', computerName)
+      
+      // Chamar API de desvinculação
+      const result = await apiMethods.desvincularUsuario(computerName)
+      
+      console.log('✅ Usuário desvinculado com sucesso:', result)
+      
+      // Salvar mensagem no sessionStorage para mostrar após reload
+      sessionStorage.setItem('toast_message', `Usuário ${result.data.usuario_desvinculado} desvinculado com sucesso do computador ${computerName}!`)
+      sessionStorage.setItem('toast_type', 'success')
+      
+      // Ativar loading e recarregar imediatamente
+      setPageReloading(true)
+      window.location.reload()
       
     } catch (error) {
-      console.error('Erro ao desvincular usuário:', error)
-      alert('Erro ao desvincular usuário. Tente novamente.')
+      console.error('❌ Erro ao desvincular usuário:', error)
+      const errorMessage = error.response?.data?.detail || error.message || 'Erro desconhecido'
+      showToast(`Erro ao desvincular usuário: ${errorMessage}`, 'error')
     } finally {
       setAssignmentLoading(false)
     }
   }
 
   const openUserAssignModal = () => {
-    fetchAvailableUsers()
+    fetchFuncionarios() // Carrega funcionários do Corpore automaticamente
     setShowUserAssignModal(true)
+  }
+
+  // Função para verificar se email é válido para vinculação
+  const isEmailValido = (email) => {
+    if (!email) return false
+    const emailLower = email.toLowerCase()
+    return emailLower.includes('@seagems') || emailLower.includes('@sapura')
+  }
+
+  // Função para buscar funcionários do Corpore
+  const fetchFuncionarios = async (search = '') => {
+    try {
+      setFuncionariosLoading(true)
+      console.log('🔍 Buscando funcionários do Corpore...')
+      
+      const params = new URLSearchParams()
+      if (search && search.trim() !== '') {
+        params.append('search', search.trim())
+      }
+      params.append('limit', '50') // Limitar resultados
+      
+      const response = await api.get(`/funcionarios/?${params.toString()}`)
+      
+      if (response.data && response.data.success) {
+        setFuncionarios(response.data.funcionarios || [])
+        console.log(`✅ ${response.data.funcionarios.length} funcionários carregados`)
+      } else {
+        setFuncionarios([])
+        console.warn('⚠️ Resposta inesperada do Corpore:', response.data)
+      }
+    } catch (error) {
+      console.error('❌ Erro ao buscar funcionários:', error)
+      setFuncionarios([])
+    } finally {
+      setFuncionariosLoading(false)
+    }
   }
 
   const formatDate = (dateString) => {
@@ -977,7 +1110,12 @@ const ComputerDetail = () => {
                     {currentUserLiveLoading ? (
                       'Consultando...'
                     ) : (() => {
-                      // Handle live user data with proper status checking
+                      // Priorizar dados do SQL (computer.currentUser), depois dados live
+                      if (computer.currentUser && computer.currentUser.trim() !== '') {
+                        return computer.currentUser;
+                      }
+                      
+                      // Se não há dados no SQL, mostrar resultado da consulta live
                       if (currentUserLive && typeof currentUserLive === 'object') {
                         if (currentUserLive.status === 'ok' && currentUserLive.usuario_atual) {
                           return currentUserLive.usuario_atual;
@@ -989,18 +1127,21 @@ const ComputerDetail = () => {
                           return `Erro: ${currentUserLive.message || 'Erro desconhecido'}`;
                         }
                       }
-                      // Handle simple string values or fallback
-                      return currentUserLive || computer.currentUser || 'N/A';
+                      
+                      // Fallback final
+                      return currentUserLive || 'N/A';
                     })()}
                   </span>
+
                 </div>
                 <div className="ml-2 space-x-2">
                   <button
                     onClick={() => fetchCurrentUser(true)}
                     disabled={currentUserLiveLoading}
                     className="px-3 py-1 bg-gray-200 text-gray-800 text-xs rounded hover:bg-gray-300 disabled:opacity-50"
+                    title="Atualizar informação do usuário atual"
                   >
-                    {currentUserLiveLoading ? 'Consultando...' : 'Atualizar Usuário Atual'}
+                    {currentUserLiveLoading ? 'Atualizando...' : 'Atualizar'}
                   </button>
                   {computer.currentUser ? (
                     <button
@@ -1027,6 +1168,27 @@ const ComputerDetail = () => {
               <dt className="text-sm font-medium text-gray-500">Usuário anterior</dt>
               <dd className="text-sm text-gray-900">{computer.previousUser || 'N/A'}</dd>
             </div>
+
+            <div>
+              <dt className="text-sm font-medium text-gray-500">Inventário</dt>
+              <dd className="text-sm text-gray-900">
+                <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                  computer.inventoryStatus === 'Spare' 
+                    ? 'bg-yellow-100 text-yellow-800' 
+                    : 'bg-green-100 text-green-800'
+                }`}>
+                  {computer.inventoryStatus === 'Spare' ? 'Spare' : 'Em Uso'}
+                </span>
+              </dd>
+            </div>
+
+            {/* Mostrar Base apenas se for SHQ */}
+            {computer.name && computer.name.toUpperCase().startsWith('SHQ') && computer.location && (
+              <div>
+                <dt className="text-sm font-medium text-gray-500">Base</dt>
+                <dd className="text-sm text-gray-900">{computer.location}</dd>
+              </div>
+            )}
           </dl>
         </div>
 
@@ -1394,34 +1556,48 @@ const ComputerDetail = () => {
             {/* Informações do Servidor DHCP */}
             <dl className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
-                <dt className="text-sm font-medium text-gray-500">Navio/Local</dt>
+                <dt className="text-sm font-medium text-gray-500">
+                  {dhcpInfo.network_type === 'onshore' ? 'Localização' : 'Navio/Local'}
+                </dt>
                 <dd className="text-sm text-gray-900 font-medium flex items-center">
                   <MapPin className="h-4 w-4 mr-1 text-blue-600" />
-                  {dhcpInfo.ship_name || 'N/A'}
-                  {dhcpInfo.source && (
+                  {dhcpInfo.network_type === 'onshore' ? dhcpInfo.location : (dhcpInfo.ship_name || 'N/A')}
+                  {dhcpInfo.network_type === 'onshore' ? (
+                    <span className="ml-2 px-2 py-1 text-xs bg-green-100 text-green-800 rounded-full font-medium">
+                      ONSHORE
+                    </span>
+                  ) : dhcpInfo.source && (
                     <span className="ml-2 text-xs text-gray-500">({dhcpInfo.source})</span>
                   )}
                 </dd>
               </div>
               <div>
-                <dt className="text-sm font-medium text-gray-500">Servidor DHCP</dt>
+                <dt className="text-sm font-medium text-gray-500">
+                  {dhcpInfo.network_type === 'onshore' ? 'Tipo de Rede' : 'Servidor DHCP'}
+                </dt>
                 <dd className="text-sm text-gray-900 font-mono bg-gray-50 px-2 py-1 rounded flex items-center">
                   <Server className="h-4 w-4 mr-1 text-gray-600" />
                   {dhcpInfo.dhcp_server || 'N/A'}
                 </dd>
               </div>
               <div>
-                <dt className="text-sm font-medium text-gray-500">Status no DHCP</dt>
+                <dt className="text-sm font-medium text-gray-500">
+                  {dhcpInfo.network_type === 'onshore' ? 'Status de Rede' : 'Status no DHCP'}
+                </dt>
                 <dd className="text-sm text-gray-900">
-                  <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${dhcpStatus.color}`}>
-                    {dhcpStatus.text}
+                  <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                    dhcpInfo.network_type === 'onshore' 
+                      ? 'bg-green-100 text-green-800' 
+                      : dhcpStatus.color
+                  }`}>
+                    {dhcpInfo.network_type === 'onshore' ? 'Conectado - Onshore' : dhcpStatus.text}
                   </span>
                 </dd>
               </div>
             </dl>
 
-            {/* Resultados da Busca */}
-            {dhcpInfo.service_tag_found && dhcpInfo.search_results && dhcpInfo.search_results.length > 0 ? (
+            {/* Resultados da Busca - Ocultar para computadores SHQ */}
+            {dhcpInfo.network_type !== 'onshore' && dhcpInfo.service_tag_found && dhcpInfo.search_results && dhcpInfo.search_results.length > 0 ? (
               <div>
                 <h4 className="text-md font-medium text-gray-900 mb-3 flex items-center">
                   <Search className="h-5 w-5 mr-2 text-green-600" />
@@ -1496,8 +1672,8 @@ const ComputerDetail = () => {
               </div>
             )}
 
-            {/* Resumo dos Filtros */}
-            {dhcpInfo.filters && (
+            {/* Resumo dos Filtros - Ocultar para computadores SHQ */}
+            {dhcpInfo.network_type !== 'onshore' && dhcpInfo.filters && (
               <div className="bg-gray-50 p-4 rounded-lg">
                 <h4 className="text-sm font-medium text-gray-900 mb-2">Resumo dos Filtros DHCP</h4>
                 <div className="grid grid-cols-3 gap-4 text-center">
@@ -1582,57 +1758,101 @@ const ComputerDetail = () => {
                 </p>
               </div>
 
-              {/* Campo de busca de usuários */}
+              {/* Campo de busca de funcionários */}
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Buscar Usuário
+                  Buscar Funcionário
                 </label>
-                <input
-                  type="text"
-                  value={userSearchTerm}
-                  onChange={(e) => setUserSearchTerm(e.target.value)}
-                  placeholder="Digite o nome do usuário..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+                <div className="flex space-x-2">
+                  <input
+                    type="text"
+                    value={userSearchTerm}
+                    onChange={(e) => setUserSearchTerm(e.target.value)}
+                    placeholder="Digite nome ou matrícula..."
+                    className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                  <button
+                    onClick={() => fetchFuncionarios(userSearchTerm)}
+                    disabled={funcionariosLoading}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {funcionariosLoading ? 'Buscando...' : 'Buscar'}
+                  </button>
+                </div>
               </div>
 
-              {/* Lista de usuários */}
+              {/* Lista de funcionários */}
               <div className="mb-6 max-h-64 overflow-y-auto">
                 <div className="space-y-2">
-                  {availableUsers
-                    .filter(user => 
-                      user.name.toLowerCase().includes(userSearchTerm.toLowerCase()) ||
-                      user.email.toLowerCase().includes(userSearchTerm.toLowerCase())
-                    )
-                    .map(user => (
-                      <div
-                        key={user.id}
-                        onClick={() => setSelectedUser(user)}
-                        className={`p-3 border rounded-lg cursor-pointer transition-colors ${
-                          selectedUser?.id === user.id
-                            ? 'border-blue-500 bg-blue-50'
-                            : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="font-medium text-gray-900">{user.name}</p>
-                            <p className="text-sm text-gray-600">{user.email}</p>
-                            <p className="text-xs text-gray-500">{user.position} - {user.base}</p>
+                  {funcionariosLoading ? (
+                    <div className="flex items-center justify-center py-4">
+                      <div className="text-sm text-gray-600">Carregando funcionários...</div>
+                    </div>
+                  ) : funcionarios.length > 0 ? (
+                    funcionarios.map(funcionario => {
+                      const email = funcionario.email_corporativo || funcionario.email
+                      const emailValido = isEmailValido(email)
+                      const podeVincular = !funcionario.demitido && emailValido
+                      
+                      return (
+                        <div
+                          key={funcionario.matricula}
+                          onClick={() => {
+                            if (podeVincular) {
+                              setSelectedUser({
+                                id: funcionario.matricula,
+                                name: funcionario.nome,
+                                email: email,
+                                email_corporativo: funcionario.email_corporativo,
+                                source: 'corpore',
+                                matricula: funcionario.matricula,
+                                cargo: funcionario.cargo,
+                                unidade: funcionario.unidade
+                              })
+                            }
+                          }}
+                          className={`p-3 border rounded-md transition-colors ${
+                            !podeVincular
+                              ? 'border-red-200 bg-red-50 opacity-60 cursor-not-allowed'
+                              : selectedUser?.matricula === funcionario.matricula
+                                ? 'border-blue-500 bg-blue-50 cursor-pointer'
+                                : 'border-gray-200 hover:border-gray-300 cursor-pointer'
+                          }`}
+                        >
+                          <div className="flex justify-between items-start">
+                            <div className="flex-1">
+                              <div className="font-medium text-gray-900">
+                                {funcionario.nome}
+                                {funcionario.demitido && (
+                                  <span className="ml-2 text-xs text-red-600 font-normal">(DEMITIDO)</span>
+                                )}
+                                {!emailValido && !funcionario.demitido && (
+                                  <span className="ml-2 text-xs text-orange-600 font-normal">(SEM EMAIL VÁLIDO)</span>
+                                )}
+                              </div>
+                              <div className="text-sm text-gray-600">
+                                Matrícula: {funcionario.matricula} | {funcionario.cargo}
+                              </div>
+                              <div className={`text-sm ${!emailValido ? 'text-red-600' : 'text-gray-600'}`}>
+                                {email || 'Sem email corporativo'}
+                                {!emailValido && email && (
+                                  <span className="ml-2 text-xs text-orange-600">(Deve ser @seagems ou @sapura)</span>
+                                )}
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                {funcionario.unidade}
+                              </div>
+                            </div>
                           </div>
-                          {selectedUser?.id === user.id && (
-                            <CheckCircle className="h-5 w-5 text-blue-600" />
-                          )}
                         </div>
-                      </div>
-                    ))}
+                      )
+                    })
+                  ) : (
+                    <div className="text-center py-4 text-gray-500">
+                      {userSearchTerm ? 'Nenhum funcionário encontrado' : 'Digite um termo para buscar'}
+                    </div>
+                  )}
                 </div>
-
-                {availableUsers.length === 0 && (
-                  <div className="text-center py-4">
-                    <p className="text-sm text-gray-500">Nenhum usuário encontrado</p>
-                  </div>
-                )}
               </div>
 
               {/* Botões de ação */}
@@ -1651,6 +1871,34 @@ const ComputerDetail = () => {
                   {assignmentLoading ? 'Vinculando...' : 'Vincular Usuário'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Container */}
+      <ToastContainer />
+
+      {/* Modal de Confirmação */}
+      <ConfirmationModal
+        isOpen={confirmModal.isOpen}
+        type={confirmModal.type}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        loading={assignmentLoading}
+        onConfirm={confirmModal.onConfirm}
+        onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+        confirmText={confirmModal.type === 'danger' ? 'Desvincular' : 'Vincular'}
+      />
+
+      {/* Loading Overlay para reload da página */}
+      {pageReloading && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-8 flex flex-col items-center space-y-4 shadow-2xl">
+            <RefreshCw className="h-12 w-12 animate-spin text-blue-600" />
+            <div className="text-center">
+              <p className="text-lg font-medium text-gray-900">Atualizando dados...</p>
+              <p className="text-sm text-gray-500">A página será recarregada em instantes</p>
             </div>
           </div>
         </div>

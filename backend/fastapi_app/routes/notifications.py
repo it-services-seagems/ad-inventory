@@ -9,4 +9,4 @@ def unread_count():
 
     This is a temporary mock to prevent frontend 404s for the notification bell.
     """
-    return {"count": 1}
+    return {"count": 2}

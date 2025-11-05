@@ -554,7 +554,9 @@ const Computers = () => {
           computer.osVersion || '',
           ou.name,
           ou.code,
-          warrantyStatus.text
+          warrantyStatus.text,
+          computer.usuarioAtual || '',
+          computer.usuarioAnterior || ''
         ].join(' ').toLowerCase()
         
         return {
@@ -565,7 +567,9 @@ const Computers = () => {
           ou,
           warranty,
           warrantyStatus,
-          searchableText
+          searchableText,
+          currentUser: computer.usuarioAtual || '',
+          previousUser: computer.usuarioAnterior || ''
         }
       }),
       
@@ -673,6 +677,8 @@ const Computers = () => {
         return computer.warrantyStatus?.sortValue || 999999
       case 'lastLogin':
         return computer.loginStatus?.sortValue || 999999
+      case 'currentUser':
+        return computer.currentUser?.toLowerCase() || 'zzz' // Coloca sem usuário no final
       case 'status':
         return computer.isEnabled ? 0 : 1
       case 'created':
@@ -2094,6 +2100,7 @@ const Computers = () => {
                   <SortableHeader sortKey="os" className="w-40">Sistema Op.</SortableHeader>
                   <SortableHeader sortKey="warranty" className="w-36">Garantia Dell</SortableHeader>
                   <SortableHeader sortKey="lastLogin" className="w-32">Último Login</SortableHeader>
+                  <SortableHeader sortKey="currentUser" className="w-40">Usuário Atual</SortableHeader>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32 sticky right-32 bg-gray-50">Ações</th>
                   <SortableHeader sortKey="created" className="w-32 sticky right-0 bg-gray-50">Criado em</SortableHeader>
                 </tr>
@@ -2167,6 +2174,23 @@ const Computers = () => {
                           <span className="truncate">{computer.loginStatus.text}</span>
                         </div>
                         {computer.lastLogon && (<div className="text-xs text-gray-500 mt-1 truncate">{formatDate(computer.lastLogon)}</div>)}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        <div className="text-sm text-gray-900 truncate">
+                          {computer.currentUser ? (
+                            <>
+                              <div className="font-medium truncate">{computer.currentUser}</div>
+                              {computer.previousUser && (
+                                <div className="text-xs text-gray-500 truncate">
+                                  Anterior: {computer.previousUser}
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-gray-400 italic text-xs">Usuário não identificado</span>
+                          )}
+                        </div>
                       </td>
 
                       <td className="px-4 py-3 whitespace-nowrap text-sm font-medium sticky right-32 bg-white group-hover:bg-blue-50">

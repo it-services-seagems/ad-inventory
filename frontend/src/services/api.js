@@ -1,10 +1,9 @@
 import axios from 'axios'
 
-// Use Vite env variable VITE_API_URL when provided, otherwise use relative '/api'
-// Using a relative '/api' lets the dev server proxy (vite) forward requests to Flask,
-// avoiding CORS during development. In production you can set VITE_API_URL to the
-// full backend URL if needed.
-const API_BASE = import.meta.env.VITE_API_URL || '/api'
+// NOTE: Force the backend API IP and port for this deployment
+// Previously this used Vite's VITE_API_URL fallback; we now explicitly use the
+// target IP so the frontend always talks to the backend at 10.15.2.19:42059.
+const API_BASE = 'http://10.15.2.19:42059/api'
 
 const api = axios.create({
   baseURL: API_BASE,
@@ -47,5 +46,61 @@ api.interceptors.response.use(
     return Promise.reject(error)
   }
 )
+
+// Funções específicas para API
+export const apiMethods = {
+  // Buscar usuário atual por service tag
+  getCurrentUserByServiceTag: async (serviceTag) => {
+    try {
+      const response = await api.get(`/computers/user-by-service-tag/${encodeURIComponent(serviceTag)}`)
+      return response.data
+    } catch (error) {
+      console.error('Erro ao buscar usuário por service tag:', error)
+      throw error
+    }
+  },
+
+  // Buscar usuário atual por nome da máquina (método original)
+  getCurrentUserByComputerName: async (computerName) => {
+    try {
+      const response = await api.get(`/computers/${encodeURIComponent(computerName)}/current-user`)
+      return response.data
+    } catch (error) {
+      console.error('Erro ao buscar usuário atual:', error)
+      throw error
+    }
+  },
+
+  // Vincular funcionário a computador
+  vincularUsuario: async (computerName, funcionario) => {
+    try {
+      const payload = {
+        computer_name: computerName,
+        matricula: funcionario.matricula,
+        nome: funcionario.nome,
+        email_corporativo: funcionario.email_corporativo || funcionario.email
+      }
+      const response = await api.post('/funcionarios/vincular-usuario', payload)
+      return response.data
+    } catch (error) {
+      console.error('Erro ao vincular usuário:', error)
+      throw error
+    }
+  },
+
+  // Desvincular usuário de computador
+  desvincularUsuario: async (computerName) => {
+    try {
+      const payload = {
+        computer_name: computerName
+      }
+      const response = await api.post('/funcionarios/desvincular-usuario', payload)
+      return response.data
+    } catch (error) {
+      console.error('Erro ao desvincular usuário:', error)
+      throw error
+    }
+  }
+}
 
 export default api

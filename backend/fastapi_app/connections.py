@@ -5,14 +5,12 @@ performs lightweight checks and returns a status dictionary. The FastAPI
 startup event calls that helper and prints results to the console.
 """
 
-import importlib
 import logging
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
-# Global holders for manager instances (may be reused from backend.app)
-## Prefer local managers under fastapi_app.managers
+# Global holders for manager instances - use only local managers under fastapi_app.managers
 from . import managers as local_managers
 
 sql_manager = getattr(local_managers, 'sql_manager', None)
@@ -20,69 +18,43 @@ ad_manager = getattr(local_managers, 'ad_manager', None)
 ad_computer_manager = getattr(local_managers, 'ad_computer_manager', None)
 from .managers import dell as dell_module
 dell_api = getattr(dell_module, 'dell_api', None)
-dhcp_manager = None
-sync_service = None
-
-
-def _load_from_backend_app():
-    global sql_manager, ad_manager, ad_computer_manager, dell_api, dhcp_manager, sync_service
-    try:
-        mod = importlib.import_module('backend.app')
-        # Only set backend.app managers when local ones are not present
-        if sql_manager is None:
-            sql_manager = getattr(mod, 'sql_manager', None)
-        if ad_manager is None:
-            ad_manager = getattr(mod, 'ad_manager', None)
-        if ad_computer_manager is None:
-            ad_computer_manager = getattr(mod, 'ad_computer_manager', None)
-        dell_api = getattr(mod, 'dell_api', None)
-        if dhcp_manager is None:
-            dhcp_manager = getattr(mod, 'dhcp_manager', None)
-        if sync_service is None:
-            sync_service = getattr(mod, 'sync_service', None)
-        logger.info('Loaded backend.app managers (local managers preserved when available)')
-    except Exception as e:
-        # Log full exception with traceback to help debugging why backend.app can't be imported
-        logger.exception('Could not import backend.app when attempting to reuse legacy managers')
-
-
-# Try loading on import
-_load_from_backend_app()
+dhcp_manager = getattr(local_managers, 'dhcp_manager', None)
+sync_service = getattr(local_managers, 'sync_service', None)
 
 
 def require_sql_manager():
     if sql_manager is None:
-        raise RuntimeError('SQL manager not available. Import backend.app or configure a SQL manager instance.')
+        raise RuntimeError('SQL manager not available. Configure a SQL manager instance under fastapi_app.managers.')
     return sql_manager
 
 
 def require_ad_manager():
     if ad_manager is None:
-        raise RuntimeError('AD manager not available. Import backend.app or configure an AD manager instance.')
+        raise RuntimeError('AD manager not available. Configure an AD manager instance under fastapi_app.managers.')
     return ad_manager
 
 
 def require_ad_computer_manager():
     if ad_computer_manager is None:
-        raise RuntimeError('AD Computer manager not available. Import backend.app or configure an instance.')
+        raise RuntimeError('AD Computer manager not available. Configure an instance under fastapi_app.managers.')
     return ad_computer_manager
 
 
 def require_dell_api():
     if dell_api is None:
-        raise RuntimeError('Dell API client not available. Import backend.app or configure an instance.')
+        raise RuntimeError('Dell API client not available. Configure an instance under fastapi_app.managers.')
     return dell_api
 
 
 def require_dhcp_manager():
     if dhcp_manager is None:
-        raise RuntimeError('DHCP manager not available. Import backend.app or configure an instance.')
+        raise RuntimeError('DHCP manager not available. Configure an instance under fastapi_app.managers.')
     return dhcp_manager
 
 
 def require_sync_service():
     if sync_service is None:
-        raise RuntimeError('Sync service not available. Import backend.app or configure an instance.')
+        raise RuntimeError('Sync service not available. Configure an instance under fastapi_app.managers.')
     return sync_service
 
 

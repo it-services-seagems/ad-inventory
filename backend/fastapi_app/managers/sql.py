@@ -2,6 +2,7 @@ import pyodbc
 import logging
 from datetime import datetime, timedelta
 from ..config import SQL_SERVER, SQL_DATABASE, SQL_USERNAME, SQL_PASSWORD, USE_WINDOWS_AUTH
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +16,60 @@ class SQLManager:
             logger.exception('SQL test connection failed on init')
 
     def _build_connection_string(self):
-        if USE_WINDOWS_AUTH:
-            return f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={SQL_SERVER};DATABASE={SQL_DATABASE};Trusted_Connection=yes;"
+        """Build a connection string.
+
+        Behavior:
+        - If env var SQL_ODBC_DRIVER is set, use it.
+        - Otherwise autodetect available ODBC drivers and prefer:
+          ODBC Driver 18 for SQL Server -> ODBC Driver 17 for SQL Server -> SQL Server Native Client 11.0
+        - If Driver 18 is selected, include sensible Encrypt/TrustServerCertificate defaults which can be overridden
+          via SQL_ODBC_ENCRYPT env var ('yes'/'no').
+        """
+        # Allow manual override
+        env_driver = os.getenv('SQL_ODBC_DRIVER')
+        driver = None
+        if env_driver:
+            driver = env_driver
         else:
-            return f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={SQL_SERVER};DATABASE={SQL_DATABASE};UID={SQL_USERNAME};PWD={SQL_PASSWORD};"
+            try:
+                available = list(pyodbc.drivers())
+            except Exception:
+                available = []
+
+            # preference order
+            for candidate in ('ODBC Driver 18 for SQL Server', 'ODBC Driver 17 for SQL Server', 'SQL Server Native Client 11.0'):
+                if candidate in available:
+                    driver = candidate
+                    break
+
+            # fallback: pick first driver that mentions SQL Server
+            if not driver:
+                for d in available:
+                    if 'SQL Server' in d:
+                        driver = d
+                        break
+
+            # final fallback: use a common name (this may still fail if driver absent)
+            if not driver:
+                driver = 'ODBC Driver 17 for SQL Server'
+
+        # Driver-specific options (Driver 18 may require TLS settings)
+        encrypt_env = os.getenv('SQL_ODBC_ENCRYPT')
+        encrypt_part = ''
+        if driver and driver.startswith('ODBC Driver 18'):
+            # default to no encryption but trust server certificate to avoid handshake problems on internal networks
+            if encrypt_env is None:
+                encrypt_part = 'Encrypt=no;TrustServerCertificate=yes;'
+            else:
+                if encrypt_env.lower() in ('1', 'true', 'yes'):
+                    encrypt_part = 'Encrypt=yes;TrustServerCertificate=yes;'
+                else:
+                    encrypt_part = 'Encrypt=no;TrustServerCertificate=yes;'
+
+        if USE_WINDOWS_AUTH:
+            return f"DRIVER={{{driver}}};SERVER={SQL_SERVER};DATABASE={SQL_DATABASE};{encrypt_part}Trusted_Connection=yes;"
+        else:
+            return f"DRIVER={{{driver}}};SERVER={SQL_SERVER};DATABASE={SQL_DATABASE};UID={SQL_USERNAME};PWD={SQL_PASSWORD};{encrypt_part}"
 
     def _test_connection(self):
         with pyodbc.connect(self.connection_string) as conn:
@@ -53,6 +104,38 @@ class SQLManager:
     def get_computers_from_sql(self, inventory_filter=None):
         # Build a resilient select that only references columns that exist in the computers table
         try:
+            # helper to format datetime-like values safely
+            def _format_dt(v):
+                if v is None:
+                    return None
+                # already a datetime
+                if isinstance(v, datetime):
+                    return v.isoformat()
+                # strings: try parsing common SQL datetime formats to isoformat, otherwise return as-is
+                if isinstance(v, str):
+                    try:
+                        # try ISO-like strings first (replace space with T)
+                        return datetime.fromisoformat(v.replace(' ', 'T')).isoformat()
+                    except Exception:
+                        try:
+                            return datetime.strptime(v, '%Y-%m-%d %H:%M:%S.%f').isoformat()
+                        except Exception:
+                            try:
+                                return datetime.strptime(v, '%Y-%m-%d %H:%M:%S').isoformat()
+                            except Exception:
+                                # leave the original string if we can't parse it
+                                return v
+                # numeric timestamps
+                if isinstance(v, (int, float)):
+                    try:
+                        return datetime.fromtimestamp(v).isoformat()
+                    except Exception:
+                        return str(v)
+                # fallback to string representation
+                try:
+                    return str(v)
+                except Exception:
+                    return None
             # Inspect available columns from computers table
             try:
                 cols_info = self.execute_query("SELECT TOP 0 * FROM computers")
@@ -79,9 +162,17 @@ class SQLManager:
                 select_cols.append('c.ip_address')
             if has('mac_address'):
                 select_cols.append('c.mac_address')
+            if has('usuario_atual'):
+                select_cols.append('c.usuario_atual')
+            if has('usuario_anterior'):
+                select_cols.append('c.usuario_anterior')
+            if has('status'):
+                select_cols.append('c.status')
+            if has('location'):
+                select_cols.append('c.location')
 
             # OS and organization joins are optional but safe to include; OS fields come from separate table
-            select_cols.append('o.name as os')
+            select_cols.append('os.name as os')
             select_cols.append('os.version as osVersion')
             select_clause = ',\n            '.join(select_cols)
 
@@ -107,10 +198,10 @@ class SQLManager:
                         'id': r.get('id'),
                         'name': r.get('name'),
                         'dn': r.get('dn'),
-                        'lastLogon': r.get('lastLogon').isoformat() if r.get('lastLogon') else None,
+                        'lastLogon': _format_dt(r.get('lastLogon')),
                         'os': r.get('os') or 'N/A',
                         'osVersion': r.get('osVersion') or 'N/A',
-                        'created': r.get('created').isoformat() if r.get('created') else None,
+                        'created': _format_dt(r.get('created')),
                         'description': r.get('description') or '',
                         'disabled': not bool(r.get('is_enabled')),
                         'userAccountControl': r.get('user_account_control') or 0,
@@ -118,6 +209,10 @@ class SQLManager:
                         'dnsHostName': r.get('dns_hostname') or '',
                         'ipAddress': r.get('ip_address') if has('ip_address') else '',
                         'macAddress': r.get('mac_address') if has('mac_address') else '',
+                        'usuarioAtual': r.get('usuario_atual') if has('usuario_atual') else '',
+                        'usuarioAnterior': r.get('usuario_anterior') if has('usuario_anterior') else '',
+                        'inventoryStatus': r.get('status') if has('status') else '',
+                        'location': r.get('location') if has('location') else '',
                         'organizationName': r.get('organization_name') or '',
                         'organizationCode': r.get('organization_code') or ''
                     })
@@ -166,6 +261,75 @@ class SQLManager:
             return name
         
         return None
+
+    def get_current_user_by_service_tag(self, service_tag):
+        """Busca o usuário atual usando o service tag da máquina"""
+        if not service_tag:
+            return None
+            
+        try:
+            # Normalizar service tag
+            service_tag = service_tag.upper().strip()
+            
+            # Query para buscar usuário pelo service tag
+            # Primeiro tenta buscar diretamente pelo service tag na tabela computers
+            query = """
+            SELECT TOP 1 
+                c.name,
+                c.usuario_atual,
+                c.usuario_anterior,
+                c.description,
+                c.last_logon_timestamp
+            FROM computers c
+            WHERE UPPER(c.name) LIKE ?
+               OR UPPER(c.name) LIKE ?
+               OR UPPER(c.name) LIKE ?
+               OR UPPER(c.name) LIKE ?
+               OR UPPER(c.name) LIKE ?
+               OR UPPER(c.name) LIKE ?
+               OR UPPER(c.name) LIKE ?
+               OR UPPER(c.name) LIKE ?
+               OR UPPER(c.name) = ?
+            ORDER BY c.last_logon_timestamp DESC
+            """
+            
+            # Gerar padrões de busca para os prefixos conhecidos + service tag
+            prefixes = ['SHQ', 'ESM', 'DIA', 'TOP', 'RUB', 'JAD', 'ONI', 'CLO']
+            params = []
+            
+            # Adicionar padrões com prefixos
+            for prefix in prefixes:
+                params.append(f"{prefix}{service_tag}")
+            
+            # Adicionar service tag sem prefixo
+            params.append(service_tag)
+            
+            rows = self.execute_query(query, params=params)
+            
+            if rows:
+                row = rows[0]
+                return {
+                    'computer_name': row.get('name'),
+                    'usuario_atual': row.get('usuario_atual'),
+                    'usuario_anterior': row.get('usuario_anterior'),
+                    'description': row.get('description'),
+                    'last_logon': row.get('last_logon_timestamp'),
+                    'found': True
+                }
+            else:
+                return {
+                    'found': False,
+                    'usuario_atual': None,
+                    'message': f'Máquina com service tag {service_tag} não encontrada'
+                }
+                
+        except Exception as e:
+            logger.exception(f'Erro ao buscar usuário por service tag {service_tag}')
+            return {
+                'found': False,
+                'usuario_atual': None,
+                'error': str(e)
+            }
 
     def get_computers_for_warranty_update(self):
         """Get computers that need warranty updates (baseado no debug_c1wsb92.py) - Optimized"""

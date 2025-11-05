@@ -10,5 +10,7 @@ Import these from routers to use the new implementations instead of pulling from
 from .sql import sql_manager
 from .ad import ad_manager
 from .ad_computer import ad_computer_manager
+from .dhcp import dhcp_manager
+from .sync_service import sync_service
 
-__all__ = ["sql_manager", "ad_manager", "ad_computer_manager"]
+__all__ = ["sql_manager", "ad_manager", "ad_computer_manager", "dhcp_manager", "sync_service"]
