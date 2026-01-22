@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { BarChart3, Computer, Bell } from 'lucide-react'
+import { BarChart3, Computer, Smartphone } from 'lucide-react'
 import logo from '../assets/LogoSeagems.png'
 import api from '../services/api'
 
@@ -9,7 +9,8 @@ const Navbar = () => {
 
   const navItems = [
     { path: '/dashboard', name: 'Dashboard', icon: BarChart3 },
-    { path: '/computers', name: 'Máquinas', icon: Computer }
+    { path: '/computers', name: 'Máquinas', icon: Computer },
+    { path: '/mobiles', name: 'Celulares', icon: Smartphone }
   ]
 
   return (
@@ -37,40 +38,10 @@ const Navbar = () => {
                 </Link>
               )
             })}
-
-            {/* Notification bell (reads /notifications/unread-count) */}
-            <NotificationBell />
           </div>
         </div>
       </div>
     </nav>
-  )
-}
-
-const NotificationBell = () => {
-  const [count, setCount] = useState(0)
-
-  useEffect(() => {
-    let mounted = true
-    const fetchCount = async () => {
-      try {
-        const resp = await api.get('/notifications/unread-count')
-        if (mounted && resp?.data?.count != null) setCount(resp.data.count)
-      } catch (e) {
-        // endpoint may not exist yet — keep count at 0
-        if (mounted) setCount(0)
-      }
-    }
-    fetchCount()
-    const t = setInterval(fetchCount, 60000)
-    return () => { mounted = false; clearInterval(t) }
-  }, [])
-
-  return (
-    <div className="relative">
-      <Bell className="h-5 w-5 text-white" />
-      <span className="absolute -top-1 -right-1 bg-red-600 text-white text-xs rounded-full px-1">{count}</span>
-    </div>
   )
 }
 

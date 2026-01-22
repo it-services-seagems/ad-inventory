@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .errors import register_exception_handlers
-from .routes import computers_router, warranty_router, dhcp_router, sync_router
+from .routes import computers_router, warranty_router, dhcp_router, sync_router, mobiles_router, iphone_catalog_router
 from .routes.notifications import router as notifications_router
 from .routes.warranty_jobs import router as warranty_jobs_router
 from .routes.funcionarios import funcionarios_router
@@ -33,6 +33,8 @@ app.include_router(notifications_router, prefix="/api")
 app.include_router(warranty_jobs_router, prefix="/api")
 app.include_router(funcionarios_router, prefix="/api/funcionarios")
 app.include_router(debug_router, prefix="/api/debug")
+app.include_router(mobiles_router, prefix="/api/mobiles")
+app.include_router(iphone_catalog_router, prefix="/api/iphone-catalog")
 
 # Register error handlers
 register_exception_handlers(app)

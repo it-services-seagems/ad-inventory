@@ -80,7 +80,8 @@ async def listar_funcionarios(
                 TELEFONE1 as telefone,
                 EMAILPESSOAL as email,
                 EMAIL_CORPORATIVO as email_corporativo,
-                UPPER(ISNULL(SITUACAO_ATUAL_DESCRICAO, '')) as situacao_atual
+                UPPER(ISNULL(SITUACAO_ATUAL_DESCRICAO, '')) as situacao_atual,
+                ISNULL(SECAO_ATUAL_DECRICAO, '') as secao_atual_descricao
             FROM [dbo].[VW_FUNCIONARIOS]
         '''
 
@@ -136,6 +137,7 @@ async def listar_funcionarios(
                 'email': row_dict.get('email'),
                 'email_corporativo': row_dict.get('email_corporativo'),
                 'demitido': demitido_flag,
+                'secao_atual_descricao': row_dict.get('secao_atual_descricao') or ''
             })
 
         conn.close()

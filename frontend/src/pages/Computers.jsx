@@ -68,6 +68,7 @@ const Computers = () => {
   const navigationFiltersApplied = useRef(false)
   const searchTimeoutRef = useRef(null)
   const searchInputRef = useRef(null)
+  const lastForceRefreshRef = useRef(0)
   
   // Configurações
   const CACHE_DURATION = 10 * 60 * 1000 // 10 minutos
@@ -1162,6 +1163,13 @@ const Computers = () => {
 
   // Forçar refresh limpa toda a memória e inicia atualização de garantias
   const forceRefresh = useCallback(async () => {
+    // prevent accidental rapid repeated refreshes
+    try {
+      if (!lastForceRefreshRef) lastForceRefreshRef = { current: 0 }
+    } catch (e) {}
+    const now = Date.now()
+    if (now - (lastForceRefreshRef.current || 0) < 2000) return
+    lastForceRefreshRef.current = now
     setMemoryCache(null)
     setProcessedData(null)
     setWarrantyData(new Map())
