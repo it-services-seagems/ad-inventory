@@ -225,3 +225,34 @@ Desktop.ini
 # Logs
 *.log
 logs/
+
+# === Arquivos específicos de homologação/desenvolvimento ===
+# Configurações que podem quebrar produção
+
+# Scripts de inicialização com configurações hardcoded
+start.bat
+start.txt
+
+# Configurações de desenvolvimento/homologação do frontend
+frontend/vite.config.js
+frontend/scripts/start-homologacao.js
+frontend/scripts/build-prod.js
+
+# Arquivos de configuração de ambiente frontend
+frontend/.env
+frontend/.env.local
+frontend/.env.development
+frontend/.env.production
+
+# Configurações do backend que contêm credenciais e URLs específicas
+backend/fastapi_app/config.py
+
+# Templates e exemplos de configuração
+backend/.env.template
+backend/.env.example
+a/backend/.env.template
+a/backend/.env.example
+a/sistema_usuarios_deploy/deploy_package/backend/.env.template
+
+# Arquivos de configuração específicos do ambiente
+environments/

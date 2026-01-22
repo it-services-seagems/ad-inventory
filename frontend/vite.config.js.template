@@ -3,14 +3,14 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig(({ mode }) => {
   // Allow overriding the proxy target with VITE_API_TARGET in .env files
-  const apiTarget = process.env.VITE_API_TARGET || 'http://10.15.3.30:42059' || 'http://10.15.2.19:42059'
+  const apiTarget = process.env.VITE_API_TARGET || 'http://YOUR_API_SERVER:YOUR_API_PORT'
 
   return {
     plugins: [react()],
     server: {
       host: '0.0.0.0', 
-      allowedHosts: ['10.15.2.19'],
-      port: 42058,
+      allowedHosts: ['YOUR_ALLOWED_HOST'],
+      port: 42058, // Change this port for your environment
       proxy: {
         '/api': {
           target: apiTarget,

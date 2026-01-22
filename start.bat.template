@@ -1,0 +1,20 @@
+@echo off
+setlocal enabledelayedexpansion
+
+REM === Cleanup ===
+REM Replace with your specific ports
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :YOUR_BACKEND_PORT ^| findstr LISTENING') do (
+    taskkill /F /PID %%a 2>nul
+)
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :YOUR_FRONTEND_PORT ^| findstr LISTENING') do (
+    taskkill /F /PID %%a 2>nul
+)
+
+timeout /t 3 /nobreak >nul
+
+REM === Configure your startup commands here ===
+REM Copy this file to start.bat and configure with your specific settings
+
+echo Configure this template with your specific environment settings
+echo Copy to start.bat and replace YOUR_* placeholders
+pause

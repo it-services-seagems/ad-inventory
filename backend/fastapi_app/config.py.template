@@ -2,17 +2,17 @@ import os
 from typing import List
 
 # Keep names similar to original Flask app for easier migration
-AD_SERVER = os.getenv('AD_SERVER', 'ldap://CLODC02.snm.local')
-AD_USERNAME = os.getenv('AD_USERNAME', 'SNM\\adm.itservices')
-AD_PASSWORD = os.getenv('AD_PASSWORD', 'xmZ7P@5vkKzg')
-AD_BASE_DN = os.getenv('AD_BASE_DN', 'DC=snm,DC=local')
+AD_SERVER = os.getenv('AD_SERVER', 'ldap://YOUR_AD_SERVER.domain.local')
+AD_USERNAME = os.getenv('AD_USERNAME', 'DOMAIN\\your_username')
+AD_PASSWORD = os.getenv('AD_PASSWORD', 'your_password')
+AD_BASE_DN = os.getenv('AD_BASE_DN', 'DC=domain,DC=local')
 
-DELL_CLIENT_ID = os.getenv('DELL_CLIENT_ID', 'l75c9d200744a444a08c54b666ddbd9b1a')
-DELL_CLIENT_SECRET = os.getenv('DELL_CLIENT_SECRET', '5a6bfc5dd76c40a6bd8b896c6ab63e9e')
+DELL_CLIENT_ID = os.getenv('DELL_CLIENT_ID', 'your_dell_client_id')
+DELL_CLIENT_SECRET = os.getenv('DELL_CLIENT_SECRET', 'your_dell_client_secret')
 
 
-SQL_SERVER = os.getenv('SQL_SERVER', 'CLOSQL02')
-SQL_DATABASE = os.getenv('SQL_DATABASE', 'DellReports')
+SQL_SERVER = os.getenv('SQL_SERVER', 'YOUR_SQL_SERVER')
+SQL_DATABASE = os.getenv('SQL_DATABASE', 'YourDatabase')
 SQL_USERNAME = os.getenv('SQL_USERNAME')
 SQL_PASSWORD = os.getenv('SQL_PASSWORD')
 USE_WINDOWS_AUTH = os.getenv('USE_WINDOWS_AUTH', 'true').lower() == 'true'
