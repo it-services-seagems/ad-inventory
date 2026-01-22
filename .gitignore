@@ -256,3 +256,12 @@ a/sistema_usuarios_deploy/deploy_package/backend/.env.template
 
 # Arquivos de configuração específicos do ambiente
 environments/
+
+# Arquivos de documentação temporária/desenvolvimento
+CORRECOES_FRONTEND.md
+MODIFICACOES_USUARIO.md
+RESUMO_IMPLEMENTACOES.md
+start.txt
+
+# Especificações e documentos temporários
+Dell*Warranty*API*Spec*.pdf
