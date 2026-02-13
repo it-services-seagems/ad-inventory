@@ -11,16 +11,16 @@ import './App.css'
 function App() {
   return (
     <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-gray-50 flex flex-col">
         <Navbar />
-        <main>
+        <main className="flex-1 w-full">
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/dashboard" element={<div className="container mx-auto px-4 py-8"><Dashboard /></div>} />
-            <Route path="/computers" element={<div className="container mx-auto px-4 py-8"><Computers /></div>} />
-            <Route path="/computers/:computerName" element={<div className="container mx-auto px-4 py-8"><ComputerDetail /></div>} />
-            <Route path="/mobiles" element={<div className="py-8"><Mobiles /></div>} />
-            <Route path="/mobiles/:mobileId" element={<div className="py-8"><MobileDetail /></div>} />
+            <Route path="/dashboard" element={<div className="w-full px-4 py-8"><Dashboard /></div>} />
+            <Route path="/computers" element={<div className="w-full px-4 py-8"><Computers /></div>} />
+            <Route path="/computers/:computerName" element={<div className="w-full px-4 py-8"><ComputerDetail /></div>} />
+            <Route path="/mobiles" element={<div className="w-full py-8"><Mobiles /></div>} />
+            <Route path="/mobiles/:mobileId" element={<div className="w-full py-8"><MobileDetail /></div>} />
           </Routes>
         </main>
       </div>

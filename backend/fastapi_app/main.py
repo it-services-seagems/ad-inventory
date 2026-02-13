@@ -78,4 +78,4 @@ async def shutdown_event():
 if __name__ == "__main__":
     import uvicorn
     # Use fully-qualified module path so running from repository root works
-    uvicorn.run("backend.fastapi_app.main:app", host="0.0.0.0", port=42059, reload=True)
+    uvicorn.run("backend.fastapi_app.main:app", host="0.0.0.0", port=42057, reload=True)

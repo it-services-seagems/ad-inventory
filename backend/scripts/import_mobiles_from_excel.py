@@ -182,9 +182,9 @@ def main():
         if env_base:
             bases.append(env_base.rstrip('/'))
         bases.extend([
-            'http://127.0.0.1:42059',
-            'http://localhost:42059',
-            'http://10.15.3.30:42059'
+            'http://127.0.0.1:42057',
+            'http://localhost:42057',
+            'http://10.15.3.30:42057'
         ])
 
         for base in bases:

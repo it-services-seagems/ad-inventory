@@ -38,21 +38,29 @@ const ListHeader = ({
         <button onClick={handleRefresh} title="Recarregar" className="p-2 bg-white border rounded"><RefreshCw className="w-4 h-4"/></button>
       </div>
       <div className="flex items-center space-x-2">
-        <div className="flex items-center space-x-2 bg-white border rounded p-1">
-          <Filter className="w-4 h-4 text-gray-500" />
-          <select value={filterDept} onChange={e => setFilterDept(e.target.value)} className="p-1">
-            <option value="all">Todos departamentos</option>
-            {sections.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <select value={filterFuncionario} onChange={e => setFilterFuncionario(e.target.value)} onFocus={onFuncionariosFocus} className="p-1">
-            <option value="all">Todos funcionários</option>
-            {funcionarios.map(f => <option key={f} value={f}>{f}</option>)}
-          </select>
-          <select value={filterTipo} onChange={e => setFilterTipo(e.target.value)} className="p-1">
-            <option value="all">Todos tipos</option>
-            {tipos.map(t => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </div>
+        {(sections?.length > 0 || funcionarios?.length > 0 || tipos?.length > 0) && (
+          <div className="flex items-center space-x-2 bg-white border rounded p-1">
+            <Filter className="w-4 h-4 text-gray-500" />
+            {sections?.length > 0 && (
+              <select value={filterDept} onChange={e => setFilterDept(e.target.value)} className="p-1">
+                <option value="all">Todos departamentos</option>
+                {sections.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            )}
+            {funcionarios?.length > 0 && (
+              <select value={filterFuncionario} onChange={e => setFilterFuncionario(e.target.value)} onFocus={onFuncionariosFocus} className="p-1">
+                <option value="all">Todos funcionários</option>
+                {funcionarios.map(f => <option key={f} value={f}>{f}</option>)}
+              </select>
+            )}
+            {tipos?.length > 0 && (
+              <select value={filterTipo} onChange={e => setFilterTipo(e.target.value)} className="p-1">
+                <option value="all">Todos tipos</option>
+                {tipos.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            )}
+          </div>
+        )}
         {onAdd && (
           <button 
             onClick={onAdd} 

@@ -11,11 +11,7 @@ const Mobiles = () => {
   const [loading, setLoading] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('')
-  const [filterDept, setFilterDept] = useState('all')
-  const [filterTipo, setFilterTipo] = useState('all')
-  const [filterFuncionario, setFilterFuncionario] = useState('all')
   const [showAddForm, setShowAddForm] = useState(false)
-  const [sections, setSections] = useState([])
   const [funcionarios, setFuncionarios] = useState([])
   const [funcionariosCompletos, setFuncionariosCompletos] = useState([])
   const [form, setForm] = useState({ 
@@ -83,63 +79,17 @@ const Mobiles = () => {
     }
   }
 
-  // Statistics calculation
-  const stats = useMemo(() => {
-    if (!mobiles.length) return { 
-      byDept: [], 
-      byTipo: [], 
-      byBrand: [], 
-      total: 0, 
-      withFuncionario: 0, 
-      withoutFuncionario: 0 
-    }
-    
-    const byDept = {}
-    const byTipo = {}
-    const byBrand = {}
-    let withFuncionario = 0
-    let withoutFuncionario = 0
-    
-    mobiles.forEach(m => {
-      // By department
-      const dept = m.departamento || m.secao_atual_descricao || 'Sem Departamento'
-      byDept[dept] = (byDept[dept] || 0) + 1
-      
-      // By tipo
-      const tipo = m.tipo || 'Não informado'
-      byTipo[tipo] = (byTipo[tipo] || 0) + 1
-      
-      // By brand
-      const brand = m.brand || m.marca || 'Não informado'
-      byBrand[brand] = (byBrand[brand] || 0) + 1
-      
-      // Funcionario stats
-      if (m.funcionario_nome) {
-        withFuncionario++
-      } else {
-        withoutFuncionario++
-      }
-    })
-    
-    return {
-      byDept: Object.entries(byDept).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
-      byTipo: Object.entries(byTipo).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
-      byBrand: Object.entries(byBrand).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
-      total: mobiles.length,
-      withFuncionario,
-      withoutFuncionario
-    }
-  }, [mobiles])
+
 
   const filtered = useMemo(() => {
     const q = (debouncedSearchTerm || '').toLowerCase().trim()
-    const result = mobiles.filter(m => {
-      if (filterDept !== 'all' && (m.departamento || m.secao_atual_descricao || '') !== filterDept) return false
-      if (filterTipo !== 'all' && (m.tipo || '') !== filterTipo) return false
-      if (filterFuncionario !== 'all' && (m.funcionario_nome || '').trim() !== filterFuncionario) return false
-      if (!q) return true
-      return Object.values(m).some(v => (v || '').toString().toLowerCase().includes(q))
-    })
+    let result = mobiles
+    
+    if (q) {
+      result = mobiles.filter(m => 
+        Object.values(m).some(v => (v || '').toString().toLowerCase().includes(q))
+      )
+    }
     
     // Apply sorting
     result.sort((a, b) => {
@@ -150,24 +100,7 @@ const Mobiles = () => {
     })
     
     return result
-  }, [mobiles, debouncedSearchTerm, filterDept, filterTipo, filterFuncionario, sortConfig, getSortValue])
-
-  // Fetch distinct sections from funcionarios view
-  const fetchSections = async () => {
-    try {
-      const resp = await api.get('/funcionarios/?limit=1000')
-      if (resp.data && resp.data.funcionarios) {
-        const set = new Set()
-        resp.data.funcionarios.forEach(f => {
-          const val = (f.secao_atual_descricao || '').trim()
-          if (val) set.add(val)
-        })
-        setSections(Array.from(set).sort())
-      }
-    } catch (e) {
-      console.error('Erro ao carregar seções', e)
-    }
-  }
+  }, [mobiles, debouncedSearchTerm, sortConfig, getSortValue])
 
   const fetchFuncionarios = async () => {
     try {
@@ -183,7 +116,6 @@ const Mobiles = () => {
   }
 
   const handleAddClick = () => {
-    fetchSections()
     fetchFuncionarios()
     setForm({ 
       model: '', 
@@ -282,65 +214,12 @@ const Mobiles = () => {
           title="Celulares"
           searchTerm={searchTerm}
           onSearchChange={setSearchTerm}
-          sections={sections}
-          filterDept={filterDept}
-          setFilterDept={setFilterDept}
-          tipos={[...new Set(mobiles.map(m => m.tipo).filter(Boolean))]}
-          filterTipo={filterTipo}
-          setFilterTipo={setFilterTipo}
-          funcionarios={funcionarios}
-          filterFuncionario={filterFuncionario}
-          setFilterFuncionario={setFilterFuncionario}
           onAdd={handleAddClick}
           onRefresh={fetchMobiles}
-          onFuncionariosFocus={fetchFuncionarios}
         />
       </div>
 
-      {/* Estatísticas */}
-      <div className="px-6 mb-6">
-        <div className="bg-white rounded-lg shadow p-4">
-          <h3 className="text-lg font-medium text-gray-900 mb-4 flex items-center">
-            <Smartphone className="h-5 w-5 mr-2" />
-            Distribuição por Departamento
-          </h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 2xl:grid-cols-10 gap-4">
-            {(stats.byDept || []).slice(0, 15).map(dept => (
-              <div 
-                key={dept.name} 
-                className={`p-3 rounded-lg border-2 transition-all hover:shadow-md cursor-pointer ${
-                  filterDept === dept.name 
-                    ? 'border-blue-500 bg-blue-50' 
-                    : 'border-gray-200 hover:border-blue-300'
-                }`}
-                onClick={() => setFilterDept(filterDept === dept.name ? 'all' : dept.name)}
-              >
-                <div className="text-2xl font-bold text-gray-900">{dept.count}</div>
-                <div className="text-sm text-gray-600 truncate" title={dept.name}>{dept.name}</div>
-              </div>
-            ))}
-          </div>
-          
-          <div className="grid grid-cols-4 gap-4 mt-6 pt-4 border-t border-gray-200">
-            <div className="text-center">
-              <div className="text-2xl font-bold text-blue-600">{stats.total}</div>
-              <div className="text-sm text-gray-600">Total</div>
-            </div>
-            <div className="text-center">
-              <div className="text-2xl font-bold text-green-600">{stats.withFuncionario}</div>
-              <div className="text-sm text-gray-600">Com Funcionário</div>
-            </div>
-            <div className="text-center">
-              <div className="text-2xl font-bold text-red-600">{stats.withoutFuncionario}</div>
-              <div className="text-sm text-gray-600">Sem Funcionário</div>
-            </div>
-            <div className="text-center">
-              <div className="text-2xl font-bold text-purple-600">{filtered.length}</div>
-              <div className="text-sm text-gray-600">Filtrados</div>
-            </div>
-          </div>
-        </div>
-      </div>
+
 
       {loading ? (
         <div className="flex justify-center items-center py-12">
@@ -438,9 +317,9 @@ const Mobiles = () => {
                     value={form.model}
                     onChange={(value, modelData) => {
                       setForm({
-                        ...form, 
+                        ...form,
                         model: value,
-                        // Auto-completar marca se for iPhone e tiver dados do modelo
+                        
                         brand: modelData?.finalModel && value.toLowerCase().includes('iphone') ? 'Apple' : form.brand
                       })
                     }}

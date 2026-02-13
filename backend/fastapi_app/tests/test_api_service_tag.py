@@ -6,7 +6,7 @@ import requests
 import json
 import sys
 
-API_BASE = "http://10.15.2.19:42059/api"
+API_BASE = "http://10.15.2.19:42057/api"
 
 def test_api_endpoint():
     """Testa o endpoint via HTTP"""

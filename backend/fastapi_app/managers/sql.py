@@ -225,9 +225,96 @@ class SQLManager:
             return []
 
     def sync_computer_to_sql(self, computer_data):
-        # Keep placeholder behavior: return None or id
-        logger.info('sync_computer_to_sql called (placeholder)')
-        return None
+        """Sincroniza um computador do AD para o SQL Server"""
+        try:
+            if not computer_data:
+                return None
+
+            name = computer_data.get('name')
+            if not name:
+                return None
+
+            # Verificar se o computador já existe
+            check_query = "SELECT id FROM computers WHERE name = ?"
+            existing = self.execute_query(check_query, [name])
+            
+            # Preparar dados básicos para inserção/atualização
+            dns_hostname = computer_data.get('dNSHostName', '')
+            distinguished_name = computer_data.get('distinguishedName', '')
+            description = computer_data.get('description', '')
+            is_enabled = bool(computer_data.get('userAccountControl', 0) & 0x0002 == 0)  # ACCOUNTDISABLE flag
+            user_account_control = computer_data.get('userAccountControl', 0)
+            primary_group_id = computer_data.get('primaryGroupID', 515)
+            sam_account_name = computer_data.get('sAMAccountName', name)
+            
+            # Processar timestamps
+            last_logon = computer_data.get('lastLogonTimestamp')
+            created_date = computer_data.get('whenCreated')
+            
+            if existing:
+                # Atualizar computador existente - PRESERVAR dados de usuário
+                update_query = """
+                UPDATE computers 
+                SET dns_hostname = ?,
+                    distinguished_name = ?,
+                    description = ?,
+                    is_enabled = ?,
+                    user_account_control = ?,
+                    primary_group_id = ?,
+                    sam_account_name = ?,
+                    last_logon_timestamp = ?,
+                    last_sync_ad = GETDATE(),
+                    updated_at = GETDATE()
+                WHERE name = ?
+                """
+                params = [
+                    dns_hostname,
+                    distinguished_name, 
+                    description,
+                    is_enabled,
+                    user_account_control,
+                    primary_group_id,
+                    sam_account_name,
+                    last_logon,
+                    name
+                ]
+                
+                self.execute_query(update_query, params, fetch=False)
+                return existing[0]['id']  # Retorna ID existente (atualização)
+                
+            else:
+                # Inserir novo computador
+                insert_query = """
+                INSERT INTO computers (
+                    name, dns_hostname, distinguished_name, description,
+                    is_enabled, is_domain_controller, user_account_control,
+                    primary_group_id, sam_account_name, last_logon_timestamp, 
+                    created_date, last_sync_ad, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), GETDATE())
+                """
+                params = [
+                    name,
+                    dns_hostname,
+                    distinguished_name,
+                    description,
+                    is_enabled,
+                    False,  # is_domain_controller
+                    user_account_control,
+                    primary_group_id,
+                    sam_account_name,
+                    last_logon,
+                    created_date
+                ]
+                
+                self.execute_query(insert_query, params, fetch=False)
+                
+                # Buscar o ID do registro inserido
+                new_record = self.execute_query("SELECT id FROM computers WHERE name = ?", [name])
+                return new_record[0]['id'] if new_record else None  # Retorna None (nova inserção)
+                
+        except Exception as e:
+            logger.exception(f'Erro ao sincronizar computador {computer_data.get("name", "unknown")}: {e}')
+            return None
 
     def update_computer_status_in_sql(self, computer_name, is_enabled, user_account_control=None):
         try:
@@ -261,6 +348,38 @@ class SQLManager:
             return name
         
         return None
+
+    def get_all_computers(self):
+        """Retorna todos os computadores da base de dados"""
+        try:
+            query = "SELECT * FROM dbo.computers ORDER BY name"
+            return self.execute_query(query)
+        except Exception as e:
+            logger.exception(f'Erro ao buscar todos os computadores: {e}')
+            return []
+
+    def clear_computers_table(self):
+        """Limpa completamente a tabela de computadores"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM dbo.computers")
+            conn.commit()
+            cursor.close()
+            conn.close()
+            logger.info('✅ Tabela de computadores limpa')
+        except Exception as e:
+            logger.exception(f'Erro ao limpar tabela de computadores: {e}')
+            raise
+
+    def log_sync_operation(self, sync_type, status, stats):
+        """Registra operação de sincronização no log"""
+        try:
+            logger.info(f'📊 Sync {sync_type} {status}: {stats}')
+            # Opcionalmente, você pode salvar essas informações em uma tabela de log se existir
+            # Por enquanto, apenas registra no log
+        except Exception as e:
+            logger.exception(f'Erro ao registrar operação de sync: {e}')
 
     def get_current_user_by_service_tag(self, service_tag):
         """Busca o usuário atual usando o service tag da máquina"""
