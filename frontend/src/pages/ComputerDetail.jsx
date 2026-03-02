@@ -12,13 +12,11 @@ const ComputerDetail = () => {
   const [computer, setComputer] = useState(null)
   const [warranty, setWarranty] = useState(null)
   const [dhcpInfo, setDhcpInfo] = useState(null)
-  const [lastUserInfo, setLastUserInfo] = useState(null)  // NOVO ESTADO
   const [currentUserLive, setCurrentUserLive] = useState(null) // usuário atual obtido via PowerShell
   const [currentUserLiveLoading, setCurrentUserLiveLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [warrantyLoading, setWarrantyLoading] = useState(false)
   const [dhcpLoading, setDhcpLoading] = useState(false)
-  const [lastUserLoading, setLastUserLoading] = useState(false)  // NOVO ESTADO
   
   // Estados para atribuição de usuário
   const [showUserAssignModal, setShowUserAssignModal] = useState(false)
@@ -30,7 +28,7 @@ const ComputerDetail = () => {
   // Estados para funcionários do Corpore
   const [funcionarios, setFuncionarios] = useState([])
   const [funcionariosLoading, setFuncionariosLoading] = useState(false)
-  const [selectedSource, setSelectedSource] = useState('corpore') // apenas 'corpore'
+  const [selectedSource, setSelectedSource] = useState('search') // 'search' ou 'manual'
   
   // Estados para toasts e confirmação
   const { showToast, ToastContainer } = useToast()
@@ -117,15 +115,21 @@ const ComputerDetail = () => {
           console.warn('Failed to normalize computer data:', e)
           setComputer(computerData)
         }
-        // Não buscar garantia automaticamente - usar cache do SQL por padrão
+        // Buscar informações automaticamente
         fetchDHCPInfo()
-        fetchLastUserInfo()
+        
         // Só buscar usuário atual via PowerShell se não houver dados no SQL
         if (!normalized.currentUser || normalized.currentUser.trim() === '') {
           fetchCurrentUser()
         }
+        
+        // Buscar garantia automaticamente
         try {
-          fetchWarrantyInfo(false)
+          fetchWarrantyInfo(false) // Cache do SQL primeiro
+          // Atualizar garantia Dell em background
+          setTimeout(() => {
+            fetchWarrantyInfo(true) // Force refresh da garantia
+          }, 2000)
         } catch (err) {
           console.warn('Erro ao iniciar fetchWarrantyInfo automático:', err)
         }
@@ -137,47 +141,7 @@ const ComputerDetail = () => {
     }
   }
 
-  // NOVA FUNÇÃO
-  const fetchLastUserInfo = async () => {
-    try {
-      setLastUserLoading(true)
-      console.log(`🔍 Buscando último usuário para: ${computerName}`)
-      
-      // Primeiro tentar pela service tag se conseguirmos extrair
-      const serviceTag = extractServiceTagFromComputerName(computerName)
-      
-      let response
-      if (serviceTag && serviceTag !== computerName) {
-        console.log(`📋 Tentando buscar por service tag: ${serviceTag}`)
-        try {
-          response = await api.get(`/service-tag/${serviceTag}/last-user?days=30`)
-          console.log('✅ Resposta por service tag:', response.data)
-        } catch (serviceTagError) {
-          console.log('❌ Erro na busca por service tag, tentando por nome da máquina:', serviceTagError)
-          response = await api.get(`/computers/${computerName}/last-user?days=30`)
-          console.log('✅ Resposta por nome da máquina:', response.data)
-        }
-      } else {
-        console.log(`💻 Buscando diretamente por nome da máquina: ${computerName}`)
-        response = await api.get(`/computers/${computerName}/last-user?days=30`)
-        console.log('✅ Resposta por nome da máquina:', response.data)
-      }
-      
-      setLastUserInfo(response.data)
-      console.log('✅ Dados do último usuário definidos:', response.data)
-    } catch (error) {
-      console.error('❌ Erro ao carregar informações do último usuário:', error)
-      setLastUserInfo({ 
-        success: false,
-        error: error.response?.data?.error || error.message,
-        computer_name: computerName,
-        search_method: 'api_error'
-      })
-    } finally {
-      setLastUserLoading(false)
-      console.log('🏁 Busca do último usuário finalizada')
-    }
-  }
+
 
   // NOVA FUNÇÃO: busca o usuário atualmente logado na máquina via endpoint criado
   const fetchCurrentUser = async (force = false) => {
@@ -523,7 +487,27 @@ const ComputerDetail = () => {
   const handleAssignUser = () => {
     if (!selectedUser) return
 
-    // Validar email corporativo antes de mostrar confirmação
+    // Para modo manual, usar o nome digitado diretamente
+    if (selectedSource === 'manual') {
+      // Criar um objeto funcionário simplificado para modo manual
+      const manualUser = {
+        ...selectedUser,
+        matricula: 'MANUAL',
+        email_corporativo: 'manual@entrada.local'
+      }
+      
+      // Mostrar confirmação
+      setConfirmModal({
+        isOpen: true,
+        type: 'info',
+        title: 'Confirmar Vinculação',
+        message: `Deseja vincular o funcionário "${selectedUser.name}" ao computador "${computerName}"?`,
+        onConfirm: () => confirmAssignUser(manualUser)
+      })
+      return
+    }
+
+    // Validar email corporativo para modo busca
     const email = selectedUser.email_corporativo || selectedUser.email
     if (!email) {
       showToast('Funcionário não possui email corporativo cadastrado', 'error')
@@ -542,19 +526,19 @@ const ComputerDetail = () => {
       type: 'info',
       title: 'Confirmar Vinculação',
       message: `Deseja vincular o funcionário "${selectedUser.name}" ao computador "${computerName}"?`,
-      onConfirm: () => confirmAssignUser()
+      onConfirm: () => confirmAssignUser(selectedUser)
     })
   }
 
-  const confirmAssignUser = async () => {
+  const confirmAssignUser = async (userToAssign = selectedUser) => {
     try {
       setAssignmentLoading(true)
       setConfirmModal(prev => ({ ...prev, isOpen: false }))
       
-      console.log('🔗 Vinculando usuário:', selectedUser, 'à máquina:', computerName)
+      console.log('🔗 Vinculando usuário:', userToAssign, 'à máquina:', computerName)
       
       // Chamar API de vinculação
-      const result = await apiMethods.vincularUsuario(computerName, selectedUser)
+      const result = await apiMethods.vincularUsuario(computerName, userToAssign)
       
       console.log('✅ Usuário vinculado com sucesso:', result)
       
@@ -564,7 +548,7 @@ const ComputerDetail = () => {
       setUserSearchTerm('')
       
       // Salvar mensagem no sessionStorage para mostrar após reload
-      sessionStorage.setItem('toast_message', `Usuário ${selectedUser.name} vinculado com sucesso ao computador ${computerName}!`)
+      sessionStorage.setItem('toast_message', `Usuário ${userToAssign.name} vinculado com sucesso ao computador ${computerName}!`)
       sessionStorage.setItem('toast_type', 'success')
       
       // Ativar loading e recarregar imediatamente
@@ -629,7 +613,9 @@ const ComputerDetail = () => {
   }
 
   const openUserAssignModal = () => {
-    fetchFuncionarios() // Carrega funcionários do Corpore automaticamente
+    setSelectedUser(null)
+    setUserSearchTerm('')
+    setSelectedSource('search')
     setShowUserAssignModal(true)
   }
 
@@ -830,32 +816,7 @@ const ComputerDetail = () => {
     return { color: 'bg-yellow-100 text-yellow-800', text: 'Não encontrado no DHCP', icon: Search }
   }
 
-  // NOVA FUNÇÃO
-  const getLastUserStatus = (lastUserInfo) => {
-    if (!lastUserInfo || lastUserInfo.error) {
-      return { color: 'bg-gray-100 text-gray-800', text: 'Não disponível', icon: AlertTriangle }
-    }
-    
-    if (lastUserInfo.success && lastUserInfo.last_user) {
-      // Verificar se o logon é recente (últimas 24 horas)
-      if (lastUserInfo.last_logon_time) {
-        const logonDate = new Date(lastUserInfo.last_logon_time)
-        const now = new Date()
-        const hoursDiff = (now - logonDate) / (1000 * 60 * 60)
-        
-        if (hoursDiff <= 24) {
-          return { color: 'bg-green-100 text-green-800', text: 'Logon Recente', icon: Monitor }
-        } else if (hoursDiff <= 168) { // 7 dias
-          return { color: 'bg-yellow-100 text-yellow-800', text: 'Logon na Semana', icon: Calendar }
-        } else {
-          return { color: 'bg-orange-100 text-orange-800', text: 'Logon Antigo', icon: Calendar }
-        }
-      }
-      return { color: 'bg-blue-100 text-blue-800', text: 'Usuário Identificado', icon: Monitor }
-    }
-    
-    return { color: 'bg-red-100 text-red-800', text: 'Sem Logons', icon: ShieldOff }
-  }
+
 
   const getWarrantyIcon = (warrantyStatus) => {
     if (warrantyLoading) {
@@ -896,28 +857,7 @@ const ComputerDetail = () => {
     }
   }
 
-  // NOVA FUNÇÃO
-  const getLastUserIcon = (lastUserStatus) => {
-    if (lastUserLoading) {
-      return <RefreshCw className="h-8 w-8 animate-spin text-gray-400" />
-    }
-    
-    const IconComponent = lastUserStatus.icon || Monitor
-    
-    if (lastUserStatus.text === 'Logon Recente') {
-      return <IconComponent className="h-8 w-8 text-green-600" />
-    } else if (lastUserStatus.text === 'Logon na Semana') {
-      return <IconComponent className="h-8 w-8 text-yellow-600" />
-    } else if (lastUserStatus.text === 'Logon Antigo') {
-      return <IconComponent className="h-8 w-8 text-orange-600" />
-    } else if (lastUserStatus.text === 'Usuário Identificado') {
-      return <IconComponent className="h-8 w-8 text-blue-600" />
-    } else if (lastUserStatus.text === 'Sem Logons') {
-      return <IconComponent className="h-8 w-8 text-red-600" />
-    } else {
-      return <IconComponent className="h-8 w-8 text-gray-400" />
-    }
-  }
+
 
   if (loading) {
     return (
@@ -949,7 +889,6 @@ const ComputerDetail = () => {
   const loginStatus = getLastLoginStatus(computer.lastLogon)
   const warrantyStatus = getWarrantyStatus(warranty)
   const dhcpStatus = getDHCPStatus(dhcpInfo)
-  const lastUserStatus = getLastUserStatus(lastUserInfo)  // NOVA VARIÁVEL
 
   return (
     <div className="space-y-6">
@@ -1102,86 +1041,6 @@ const ComputerDetail = () => {
               <dd className="text-sm text-gray-900">{computer.inventoryStatus || 'N/A'}</dd>
             </div>
 
-            <div>
-              <dt className="text-sm font-medium text-gray-500">Usuário atual (atribuição)</dt>
-              <dd className="text-sm text-gray-900 flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <span className="font-mono">
-                    {currentUserLiveLoading ? (
-                      'Consultando...'
-                    ) : (() => {
-                      // Priorizar dados do SQL (computer.currentUser), depois dados live
-                      if (computer.currentUser && computer.currentUser.trim() !== '') {
-                        return computer.currentUser;
-                      }
-                      
-                      // Se não há dados no SQL, mostrar resultado da consulta live
-                      if (currentUserLive && typeof currentUserLive === 'object') {
-                        if (currentUserLive.status === 'ok' && currentUserLive.usuario_atual) {
-                          return currentUserLive.usuario_atual;
-                        } else if (currentUserLive.status === 'no_user') {
-                          return 'Nenhum usuário logado';
-                        } else if (currentUserLive.status === 'unreachable') {
-                          return 'Computador inacessível';
-                        } else if (currentUserLive.status === 'error') {
-                          return `Erro: ${currentUserLive.message || 'Erro desconhecido'}`;
-                        }
-                      }
-                      
-                      // Fallback final
-                      return currentUserLive || 'N/A';
-                    })()}
-                  </span>
-
-                </div>
-                <div className="ml-2 space-x-2">
-                  <button
-                    onClick={() => fetchCurrentUser(true)}
-                    disabled={currentUserLiveLoading}
-                    className="px-3 py-1 bg-gray-200 text-gray-800 text-xs rounded hover:bg-gray-300 disabled:opacity-50"
-                    title="Atualizar informação do usuário atual"
-                  >
-                    {currentUserLiveLoading ? 'Atualizando...' : 'Atualizar'}
-                  </button>
-                  {computer.currentUser ? (
-                    <button
-                      onClick={handleUnassignUser}
-                      disabled={assignmentLoading}
-                      className="px-3 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 disabled:opacity-50"
-                    >
-                      {assignmentLoading ? 'Desvinculando...' : 'Desvincular'}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={openUserAssignModal}
-                      disabled={assignmentLoading}
-                      className="px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 disabled:opacity-50"
-                    >
-                      Vincular Usuário
-                    </button>
-                  )}
-                </div>
-              </dd>
-            </div>
-
-            <div>
-              <dt className="text-sm font-medium text-gray-500">Usuário anterior</dt>
-              <dd className="text-sm text-gray-900">{computer.previousUser || 'N/A'}</dd>
-            </div>
-
-            <div>
-              <dt className="text-sm font-medium text-gray-500">Inventário</dt>
-              <dd className="text-sm text-gray-900">
-                <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                  computer.inventoryStatus === 'Spare' 
-                    ? 'bg-yellow-100 text-yellow-800' 
-                    : 'bg-green-100 text-green-800'
-                }`}>
-                  {computer.inventoryStatus === 'Spare' ? 'Spare' : 'Em Uso'}
-                </span>
-              </dd>
-            </div>
-
             {/* Mostrar Base apenas se for SHQ */}
             {computer.name && computer.name.toUpperCase().startsWith('SHQ') && computer.location && (
               <div>
@@ -1231,168 +1090,6 @@ const ComputerDetail = () => {
             </div>
           </dl>
         </div>
-      </div>
-
-      {/* NOVA SEÇÃO - Informações do Último Usuário (desabilitada - WIP) */}
-      <div className="bg-white p-6 rounded-lg shadow hover:shadow-md transition-shadow opacity-60 pointer-events-none">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center space-x-2">
-            <h3 className="text-lg font-semibold text-gray-900">Informações do Último Usuário</h3>
-            <span className="inline-block bg-yellow-100 text-yellow-800 text-xs font-semibold px-2 py-1 rounded">WIP</span>
-          </div>
-          <button
-            onClick={fetchLastUserInfo}
-            disabled={lastUserLoading}
-            className="flex items-center space-x-2 text-blue-600 hover:text-blue-800 disabled:opacity-50 transition-colors"
-          >
-            <RefreshCw className={`h-4 w-4 ${lastUserLoading ? 'animate-spin' : ''}`} />
-            <span>Atualizar</span>
-          </button>
-        </div>
-        
-        {lastUserLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <RefreshCw className="h-6 w-6 animate-spin text-blue-600" />
-            <span className="ml-2 text-gray-600">Consultando logs de eventos...</span>
-          </div>
-        ) : lastUserInfo && lastUserInfo.success ? (
-          <div className="space-y-6">
-            {/* Informações Principais */}
-            <dl className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <dt className="text-sm font-medium text-gray-500">Último Usuário</dt>
-                <dd className="text-sm text-gray-900 font-mono bg-blue-50 px-2 py-1 rounded">
-                  {lastUserInfo.last_user}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-sm font-medium text-gray-500">Data/Hora do Logon</dt>
-                <dd className="text-sm text-gray-900">
-                  {formatLogonTime(lastUserInfo.last_logon_time)}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-sm font-medium text-gray-500">Tipo de Logon</dt>
-                <dd className="text-sm text-gray-900">{lastUserInfo.logon_type}</dd>
-              </div>
-              <div>
-                <dt className="text-sm font-medium text-gray-500">Tempo de Pesquisa</dt>
-                <dd className="text-sm text-gray-900">{lastUserInfo.total_time || lastUserInfo.search_time} segundos</dd>
-              </div>
-            </dl>
-            
-            {/* Histórico de Logons Recentes */}
-            {lastUserInfo.recent_logons && lastUserInfo.recent_logons.length > 0 && (
-              <div>
-                <h4 className="text-md font-medium text-gray-900 mb-3">Logons Recentes (Últimos 5)</h4>
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Usuário
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Data/Hora
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Tipo de Logon
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          IP de Origem
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Processo de Logon
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {lastUserInfo.recent_logons.map((logon, index) => (
-                        <tr key={index} className="hover:bg-gray-50">
-                          <td className="px-6 py-4 text-sm text-gray-900 font-mono">
-                            {logon.user}
-                          </td>
-                          <td className="px-6 py-4 text-sm text-gray-500">
-                            {formatLogonTime(logon.time)}
-                          </td>
-                          <td className="px-6 py-4 text-sm text-gray-500">
-                            {logon.logon_type}
-                          </td>
-                          <td className="px-6 py-4 text-sm text-gray-500 font-mono">
-                            {logon.source_ip || 'N/A'}
-                          </td>
-                          <td className="px-6 py-4 text-sm text-gray-500">
-                            {logon.logon_process || 'N/A'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* Informações Técnicas */}
-            <div className="bg-gray-50 p-4 rounded-lg">
-              <h4 className="text-sm font-medium text-gray-900 mb-2">Detalhes Técnicos</h4>
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <span className="text-gray-500">Método de Busca:</span>
-                  <span className="ml-2 text-gray-900">{lastUserInfo.search_method || 'N/A'}</span>
-                </div>
-                <div>
-                  <span className="text-gray-500">Máquina Encontrada:</span>
-                  <span className="ml-2 text-gray-900">
-                    {lastUserInfo.computer_found !== undefined ? 
-                      (lastUserInfo.computer_found ? 'Sim' : 'Não') : 'N/A'
-                    }
-                  </span>
-                </div>
-                {lastUserInfo.service_tag && (
-                  <div>
-                    <span className="text-gray-500">Service Tag:</span>
-                    <span className="ml-2 text-gray-900 font-mono">{lastUserInfo.service_tag}</span>
-                  </div>
-                )}
-                <div>
-                  <span className="text-gray-500">Método de Conexão:</span>
-                  <span className="ml-2 text-gray-900">{lastUserInfo.connection_method || 'N/A'}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="text-center py-8">
-            <AlertTriangle className="mx-auto h-8 w-8 text-gray-400" />
-            <p className="mt-2 text-sm text-gray-500">
-              {lastUserInfo?.error || 'Não foi possível obter informações do último usuário'}
-            </p>
-            <p className="text-xs text-gray-400 mt-1">
-              Verifique se a máquina está acessível via WinRM e se os logs de eventos estão disponíveis
-            </p>
-            
-            {/* Informações de Debug */}
-            {lastUserInfo?.search_method && (
-              <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-left">
-                <p className="text-xs text-yellow-700 font-medium mb-2">
-                  🔍 Informações de Debug:
-                </p>
-                <div className="text-xs text-yellow-600 space-y-1">
-                  <p><strong>Método de busca:</strong> {lastUserInfo.search_method}</p>
-                  {lastUserInfo.computer_name && (
-                    <p><strong>Nome da máquina:</strong> {lastUserInfo.computer_name}</p>
-                  )}
-                  {lastUserInfo.service_tag && (
-                    <p><strong>Service Tag:</strong> {lastUserInfo.service_tag}</p>
-                  )}
-                  {lastUserInfo.total_time && (
-                    <p><strong>Tempo total:</strong> {lastUserInfo.total_time}s</p>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
       {/* Informações de Garantia Dell */}
@@ -1758,33 +1455,64 @@ const ComputerDetail = () => {
                 </p>
               </div>
 
-              {/* Campo de busca de funcionários */}
+              {/* Opção de entrada manual ou busca de funcionários */}
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Buscar Funcionário
+                  Modo de Vinculação
                 </label>
-                <div className="flex space-x-2">
-                  <input
-                    type="text"
-                    value={userSearchTerm}
-                    onChange={(e) => setUserSearchTerm(e.target.value)}
-                    placeholder="Digite nome ou matrícula..."
-                    className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                  <button
-                    onClick={() => fetchFuncionarios(userSearchTerm)}
-                    disabled={funcionariosLoading}
+                <div className="flex space-x-4 mb-3">
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      name="inputMode"
+                      value="search"
+                      checked={selectedSource === 'search'}
+                      onChange={(e) => setSelectedSource(e.target.value)}
+                      className="mr-2"
+                    />
+                    Buscar no PortalRH Corpore
+                  </label>
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      name="inputMode"
+                      value="manual"
+                      checked={selectedSource === 'manual'}
+                      onChange={(e) => setSelectedSource(e.target.value)}
+                      className="mr-2"
+                    />
+                    Entrada Manual
+                  </label>
+                </div>
+                
+                {selectedSource === 'search' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Buscar Funcionário
+                    </label>
+                    <div className="flex space-x-2">
+                      <input
+                        type="text"
+                        value={userSearchTerm}
+                        onChange={(e) => setUserSearchTerm(e.target.value)}
+                        placeholder="Digite nome ou matrícula..."
+                        className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                      <button
+                        onClick={() => fetchFuncionarios(userSearchTerm)}
+                        disabled={funcionariosLoading}
                     className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
                   >
                     {funcionariosLoading ? 'Buscando...' : 'Buscar'}
                   </button>
                 </div>
               </div>
+            )}
 
-              {/* Lista de funcionários */}
+            {/* Lista de funcionários para busca */}
+            {selectedSource === 'search' && (
               <div className="mb-6 max-h-64 overflow-y-auto">
-                <div className="space-y-2">
-                  {funcionariosLoading ? (
+                <div className="space-y-2">{funcionariosLoading ? (
                     <div className="flex items-center justify-center py-4">
                       <div className="text-sm text-gray-600">Carregando funcionários...</div>
                     </div>
@@ -1854,8 +1582,58 @@ const ComputerDetail = () => {
                   )}
                 </div>
               </div>
+            )}
 
-              {/* Botões de ação */}
+            {selectedSource === 'manual' && (
+                <div className="space-y-4 mb-6">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Nome Completo *
+                    </label>
+                    <input
+                      type="text"
+                      value={selectedUser?.name || ''}
+                      onChange={(e) => setSelectedUser(prev => ({ ...prev, name: e.target.value }))}
+                      placeholder="Digite o nome completo do funcionário"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Matrícula *
+                    </label>
+                    <input
+                      type="text"
+                      value={selectedUser?.matricula || ''}
+                      onChange={(e) => setSelectedUser(prev => ({ ...prev, matricula: e.target.value }))}
+                      placeholder="Digite a matrícula do funcionário"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Email Corporativo *
+                    </label>
+                    <input
+                      type="email"
+                      value={selectedUser?.email_corporativo || selectedUser?.email || ''}
+                      onChange={(e) => setSelectedUser(prev => ({ 
+                        ...prev, 
+                        email_corporativo: e.target.value,
+                        email: e.target.value 
+                      }))}
+                      placeholder="nome@seagems.com.br ou nome@sapura.com.br"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      required
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Botões de ação */}
               <div className="flex justify-end space-x-3">
                 <button
                   onClick={() => setShowUserAssignModal(false)}
@@ -1865,7 +1643,12 @@ const ComputerDetail = () => {
                 </button>
                 <button
                   onClick={handleAssignUser}
-                  disabled={!selectedUser || assignmentLoading}
+                  disabled={
+                    assignmentLoading || 
+                    !selectedUser || 
+                    (selectedSource === 'manual' && !selectedUser.name) ||
+                    (selectedSource === 'search' && !selectedUser)
+                  }
                   className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {assignmentLoading ? 'Vinculando...' : 'Vincular Usuário'}

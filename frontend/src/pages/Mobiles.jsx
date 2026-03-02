@@ -14,6 +14,7 @@ const Mobiles = () => {
   const [showAddForm, setShowAddForm] = useState(false)
   const [funcionarios, setFuncionarios] = useState([])
   const [funcionariosCompletos, setFuncionariosCompletos] = useState([])
+  const [inputMode, setInputMode] = useState('search') // 'search' ou 'manual'
   const [form, setForm] = useState({ 
     model: '', 
     brand: '', 
@@ -116,6 +117,7 @@ const Mobiles = () => {
   }
 
   const handleAddClick = () => {
+    setInputMode('search') // Inicializar com busca
     fetchFuncionarios()
     setForm({ 
       model: '', 
@@ -136,16 +138,12 @@ const Mobiles = () => {
     if (funcionario) {
       setForm({
         ...form,
-        funcionario_nome: funcionarioNome,
-        funcionario_matricula: funcionario.matricula || '',
-        departamento: funcionario.secao_atual_descricao || ''
+        funcionario_nome: funcionarioNome
       })
     } else {
       setForm({
         ...form,
-        funcionario_nome: funcionarioNome,
-        funcionario_matricula: '',
-        departamento: ''
+        funcionario_nome: funcionarioNome
       })
     }
   }
@@ -166,8 +164,7 @@ const Mobiles = () => {
         tipo: form.tipo,
         number: unformatPhoneNumber(form.number),
         eid: form.eid,
-        funcionario_nome: form.funcionario_nome,
-        funcionario_matricula: form.funcionario_matricula
+        funcionario_nome: form.funcionario_nome
       })
       setShowAddForm(false)
       fetchMobiles()
@@ -336,25 +333,55 @@ const Mobiles = () => {
                     className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent" 
                   />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Funcionário</label>
-                  <select 
-                    value={form.funcionario_nome} 
-                    onChange={e => handleFuncionarioChange(e.target.value)}
-                    className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  >
-                    <option value="">— Selecione o funcionário —</option>
-                    {funcionarios.map(f => <option key={f} value={f}>{f}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Departamento</label>
-                  <input 
-                    placeholder="Departamento (preenchido automaticamente)" 
-                    value={form.departamento} 
-                    disabled
-                    className="w-full p-3 border border-gray-300 rounded-md bg-gray-50 text-gray-600" 
-                  />
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Funcionário
+                  </label>
+                  <div className="flex space-x-4 mb-3">
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="inputMode"
+                        value="search"
+                        checked={inputMode === 'search'}
+                        onChange={(e) => setInputMode(e.target.value)}
+                        className="mr-2"
+                      />
+                      Buscar no PortalRH
+                    </label>
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="inputMode"
+                        value="manual"
+                        checked={inputMode === 'manual'}
+                        onChange={(e) => setInputMode(e.target.value)}
+                        className="mr-2"
+                      />
+                      Entrada Manual
+                    </label>
+                  </div>
+                  
+                  {inputMode === 'search' && (
+                    <select 
+                      value={form.funcionario_nome} 
+                      onChange={e => handleFuncionarioChange(e.target.value)}
+                      className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                      <option value="">— Selecione o funcionário —</option>
+                      {funcionarios.map(f => <option key={f} value={f}>{f}</option>)}
+                    </select>
+                  )}
+                  
+                  {inputMode === 'manual' && (
+                    <input 
+                      type="text"
+                      value={form.funcionario_nome} 
+                      onChange={e => setForm({...form, funcionario_nome: e.target.value})}
+                      placeholder="Digite o nome do funcionário"
+                      className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Número</label>

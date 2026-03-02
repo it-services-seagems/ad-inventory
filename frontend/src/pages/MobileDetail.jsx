@@ -101,6 +101,7 @@ const MobileDetail = () => {
   const [sections, setSections] = useState([])
   const [funcionarios, setFuncionarios] = useState([])
   const [funcionariosCompletos, setFuncionariosCompletos] = useState([])
+  const [inputMode, setInputMode] = useState('search') // 'search' ou 'manual'
   const [editForm, setEditForm] = useState({ 
     model: '', 
     brand: '', 
@@ -266,16 +267,12 @@ const MobileDetail = () => {
     if (funcionario) {
       setEditForm({
         ...editForm,
-        funcionario_nome: funcionarioNome,
-        funcionario_matricula: funcionario.matricula || '',
-        departamento: funcionario.secao_atual_descricao || ''
+        funcionario_nome: funcionarioNome
       })
     } else {
       setEditForm({
         ...editForm,
-        funcionario_nome: funcionarioNome,
-        funcionario_matricula: '',
-        departamento: ''
+        funcionario_nome: funcionarioNome
       })
     }
   }
@@ -286,6 +283,7 @@ const MobileDetail = () => {
   }
 
   const openEditModal = () => {
+    setInputMode('search') // Inicializar com busca
     fetchSections()
     fetchFuncionarios()
     setEditForm({
@@ -296,8 +294,7 @@ const MobileDetail = () => {
       tipo: mobile?.tipo || '',
       number: formatPhoneNumber(mobile?.number || mobile?.numero) || '',
       eid: mobile?.eid || '',
-      funcionario_nome: mobile?.funcionario_nome || '',
-      funcionario_matricula: mobile?.funcionario_matricula || ''
+      funcionario_nome: mobile?.funcionario_nome || ''
     })
     setShowEditModal(true)
   }
@@ -313,8 +310,7 @@ const MobileDetail = () => {
         tipo: editForm.tipo,
         number: unformatPhoneNumber(editForm.number),
         eid: editForm.eid,
-        funcionario_nome: editForm.funcionario_nome,
-        funcionario_matricula: editForm.funcionario_matricula
+        funcionario_nome: editForm.funcionario_nome
       })
       setShowEditModal(false)
       fetchMobile()
@@ -540,25 +536,55 @@ const MobileDetail = () => {
                     className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent" 
                   />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Funcionário</label>
-                  <select 
-                    value={editForm.funcionario_nome} 
-                    onChange={e => handleFuncionarioChange(e.target.value)}
-                    className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  >
-                    <option value="">— Selecione o funcionário —</option>
-                    {funcionarios.map(f => <option key={f} value={f}>{f}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Departamento</label>
-                  <input 
-                    placeholder="Departamento (preenchido automaticamente)" 
-                    value={editForm.departamento} 
-                    disabled
-                    className="w-full p-3 border border-gray-300 rounded-md bg-gray-50 text-gray-600" 
-                  />
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Funcionário
+                  </label>
+                  <div className="flex space-x-4 mb-3">
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="inputMode"
+                        value="search"
+                        checked={inputMode === 'search'}
+                        onChange={(e) => setInputMode(e.target.value)}
+                        className="mr-2"
+                      />
+                      Buscar no PortalRH
+                    </label>
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="inputMode"
+                        value="manual"
+                        checked={inputMode === 'manual'}
+                        onChange={(e) => setInputMode(e.target.value)}
+                        className="mr-2"
+                      />
+                      Entrada Manual
+                    </label>
+                  </div>
+                  
+                  {inputMode === 'search' && (
+                    <select 
+                      value={editForm.funcionario_nome} 
+                      onChange={e => handleFuncionarioChange(e.target.value)}
+                      className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                      <option value="">— Selecione o funcionário —</option>
+                      {funcionarios.map(f => <option key={f} value={f}>{f}</option>)}
+                    </select>
+                  )}
+                  
+                  {inputMode === 'manual' && (
+                    <input 
+                      type="text"
+                      value={editForm.funcionario_nome} 
+                      onChange={e => setEditForm({...editForm, funcionario_nome: e.target.value})}
+                      placeholder="Digite o nome do funcionário"
+                      className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Número</label>

@@ -68,7 +68,6 @@ const Computers = () => {
   const navigationFiltersApplied = useRef(false)
   const searchTimeoutRef = useRef(null)
   const searchInputRef = useRef(null)
-  const lastForceRefreshRef = useRef(0)
   
   // Configurações
   const CACHE_DURATION = 10 * 60 * 1000 // 10 minutos
@@ -972,9 +971,11 @@ const Computers = () => {
       
       if (response.data.success) {
         const stats = response.data.stats
+        const osUpdated = stats.os_updated || 0
+        
         setSyncMessage({ 
           type: 'success', 
-          text: `Sincronização completa realizada! ${stats.computers_deleted} removidas, ${stats.computers_added} adicionadas do AD. Total atual: ${stats.computers_after_sync}`
+          text: `Reset AD completo! ${stats.computers_deleted} removidas, ${stats.computers_added} adicionadas, ${osUpdated} sistemas operacionais mapeados.`
         })
         
         console.log('✅ Sincronização completa com limpeza concluída:', stats)
@@ -986,11 +987,11 @@ const Computers = () => {
         sessionStorage.removeItem('computers-memory-cache')
         sessionStorage.removeItem('computers-memory-time')
         
-        // Recarregar dados após 2 segundos
+        // Recarregar dados após 3 segundos
         setTimeout(() => {
           fetchComputers(false)
           setSyncMessage(null)
-        }, 2000)
+        }, 3000)
         
       } else {
         setSyncMessage({ 
@@ -1021,16 +1022,19 @@ const Computers = () => {
       const response = await api.post('/computers/sync-incremental')
       
       if (response.data.success) {
+        const stats = response.data.stats
+        const osUpdated = stats.os_updated || 0
+        
         setSyncMessage({ 
           type: 'success', 
-          text: 'Sincronização incremental concluída! Dados atualizados sem remoções.'
+          text: `Sync+ concluído! ${stats.computers_found || 0} encontrados, ${stats.computers_added || 0} atualizados, ${osUpdated} sistemas operacionais mapeados.`
         })
         
         // Recarregar dados
         setTimeout(() => {
           fetchComputers(false)
           setSyncMessage(null)
-        }, 1500)
+        }, 2000)
         
       } else {
         setSyncMessage({ 
@@ -1163,13 +1167,6 @@ const Computers = () => {
 
   // Forçar refresh limpa toda a memória e inicia atualização de garantias
   const forceRefresh = useCallback(async () => {
-    // prevent accidental rapid repeated refreshes
-    try {
-      if (!lastForceRefreshRef) lastForceRefreshRef = { current: 0 }
-    } catch (e) {}
-    const now = Date.now()
-    if (now - (lastForceRefreshRef.current || 0) < 2000) return
-    lastForceRefreshRef.current = now
     setMemoryCache(null)
     setProcessedData(null)
     setWarrantyData(new Map())
@@ -1656,8 +1653,8 @@ const Computers = () => {
           <button
             onClick={handleSyncCompleteAD}
             disabled={syncCompleteLoading || loading}
-            className="flex items-center space-x-2 bg-orange-600 text-white px-4 py-2 rounded-md hover:bg-orange-700 transition-colors disabled:opacity-50"
-            title="Sincronização completa (limpa SQL e reconstrói do AD)"
+            className="flex items-center space-x-2 bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 transition-colors disabled:opacity-50"
+            title="Reset completo do Active Directory (remove e adiciona todas as máquinas)"
           >
             <RotateCcw className={`h-4 w-4 ${syncCompleteLoading ? 'animate-spin' : ''}`} />
             <span>Reset AD</span>

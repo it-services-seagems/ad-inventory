@@ -224,6 +224,126 @@ class SQLManager:
             logger.exception('get_computers_from_sql failed')
             return []
 
+    def get_or_create_operating_system(self, os_name, os_version=None):
+        """Mapeia sistema operacional do AD para ID da tabela operating_systems usando referência fixa"""
+        if not os_name or os_name.strip() == '':
+            return None
+            
+        try:
+            # Normalizar nome do SO vindo do AD
+            normalized_name = os_name.strip().lower()
+            
+            # Mapeamento baseado na tabela de referência fornecida
+            os_mappings = {
+                # Windows Desktop
+                'windows 10 enterprise': 1,
+                'windows 10 pro': 2,
+                'windows 10 professional': 2,
+                'windows 11 enterprise': 3, 
+                'windows 11 pro': 4,
+                'windows 11 professional': 4,
+                'windows 7 professional': 11,  # Adicionar Windows 7 Professional
+                'windows 7 ultimate': 11,
+                'windows 8.1 pro': 16,
+                'windows 10 enterprise 2016 ltsb': 15,
+                'windows 11 pro for workstations': 17,
+                
+                # Windows Server
+                'windows server 2019 standard': 5,
+                'windows server 2022 standard': 6,
+                'windows server 2022 datacenter': 7,
+                'windows server 2012 r2 standard': 8,
+                'windows server 2012 r2 datacenter': 9,
+                'windows server 2008 r2 enterprise': 12,
+                'windows server 2019 datacenter': 14,
+                'windows storage server 2016 standard': 19,
+                
+                # Outros
+                'windows rt': 10,
+                'linux': 13,
+                'unknown': 18,
+                'pc-linux-gnu': 20
+            }
+            
+            # Tentar match exato primeiro
+            if normalized_name in os_mappings:
+                os_id = os_mappings[normalized_name]
+                logger.info(f"SO mapeado: '{os_name}' -> ID {os_id}")
+                return os_id
+            
+            # Tentar match parcial
+            for pattern, os_id in os_mappings.items():
+                if pattern in normalized_name:
+                    logger.info(f"SO mapeado (parcial): '{os_name}' -> ID {os_id} (pattern: {pattern})")
+                    return os_id
+            
+            # Fallbacks baseados em palavras-chave
+            if 'windows 11' in normalized_name:
+                if 'enterprise' in normalized_name:
+                    logger.info(f"SO mapeado (fallback): '{os_name}' -> Windows 11 Enterprise (ID 3)")
+                    return 3  # Windows 11 Enterprise
+                else:
+                    logger.info(f"SO mapeado (fallback): '{os_name}' -> Windows 11 Pro (ID 4)")
+                    return 4  # Windows 11 Pro
+            elif 'windows 10' in normalized_name:
+                if 'enterprise' in normalized_name:
+                    logger.info(f"SO mapeado (fallback): '{os_name}' -> Windows 10 Enterprise (ID 1)")
+                    return 1  # Windows 10 Enterprise
+                else:
+                    logger.info(f"SO mapeado (fallback): '{os_name}' -> Windows 10 Pro (ID 2)")
+                    return 2  # Windows 10 Pro
+            elif 'server 2019' in normalized_name:
+                if 'datacenter' in normalized_name:
+                    logger.info(f"SO mapeado (fallback): '{os_name}' -> Server 2019 Datacenter (ID 14)")
+                    return 14  # Windows Server 2019 Datacenter
+                else:
+                    logger.info(f"SO mapeado (fallback): '{os_name}' -> Server 2019 Standard (ID 5)")
+                    return 5   # Windows Server 2019 Standard
+            elif 'server 2022' in normalized_name:
+                if 'datacenter' in normalized_name:
+                    logger.info(f"SO mapeado (fallback): '{os_name}' -> Server 2022 Datacenter (ID 7)")
+                    return 7   # Windows Server 2022 Datacenter
+                else:
+                    logger.info(f"SO mapeado (fallback): '{os_name}' -> Server 2022 Standard (ID 6)")
+                    return 6   # Windows Server 2022 Standard
+            elif 'server 2012' in normalized_name:
+                if 'datacenter' in normalized_name:
+                    logger.info(f"SO mapeado (fallback): '{os_name}' -> Server 2012 R2 Datacenter (ID 9)")
+                    return 9   # Windows Server 2012 R2 Datacenter
+                else:
+                    logger.info(f"SO mapeado (fallback): '{os_name}' -> Server 2012 R2 Standard (ID 8)")
+                    return 8   # Windows Server 2012 R2 Standard
+            elif 'linux' in normalized_name:
+                logger.info(f"SO mapeado (fallback): '{os_name}' -> Linux (ID 20)")
+                return 20  # pc-linux-gnu ou Linux genérico
+            
+            # Se não encontrou correspondência, usar "unknown"
+            logger.warning(f"SO não mapeado: '{os_name}', usando 'unknown' (ID 18)")
+            return 18  # unknown
+            
+        except Exception as e:
+            logger.error(f"Erro ao mapear SO '{os_name}': {e}")
+            return 18  # unknown como fallback
+            family = 'Server' if is_server else ('Linux' if 'linux' in normalized_name.lower() else 'Windows')
+            
+            insert_query = """
+                INSERT INTO operating_systems (name, version, architecture, family, is_server, created_at)
+                VALUES (?, ?, 'x64', ?, ?, GETDATE())
+            """
+            
+            self.execute_query(insert_query, [normalized_name, os_version, family, is_server], fetch=False)
+            
+            # Buscar o ID criado
+            result = self.execute_query(query, [normalized_name])
+            if result:
+                logger.info(f"Criado novo SO: {normalized_name} (ID: {result[0]['id']})")
+                return result[0]['id']
+                
+        except Exception as e:
+            logger.error(f"Erro ao criar/buscar SO '{normalized_name}': {e}")
+            
+        return None
+
     def sync_computer_to_sql(self, computer_data):
         """Sincroniza um computador do AD para o SQL Server"""
         try:
@@ -251,6 +371,17 @@ class SQLManager:
             last_logon = computer_data.get('lastLogonTimestamp')
             created_date = computer_data.get('whenCreated')
             
+            # Buscar ou criar sistema operacional
+            operating_system_id = None
+            os_name = computer_data.get('os')  # Campo correto do AD
+            os_version = computer_data.get('osVersion')  # Campo correto do AD
+            
+            if os_name:
+                operating_system_id = self.get_or_create_operating_system(
+                    os_name,
+                    os_version
+                )
+            
             if existing:
                 # Atualizar computador existente - PRESERVAR dados de usuário
                 update_query = """
@@ -263,6 +394,7 @@ class SQLManager:
                     primary_group_id = ?,
                     sam_account_name = ?,
                     last_logon_timestamp = ?,
+                    operating_system_id = ?,
                     last_sync_ad = GETDATE(),
                     updated_at = GETDATE()
                 WHERE name = ?
@@ -276,6 +408,7 @@ class SQLManager:
                     primary_group_id,
                     sam_account_name,
                     last_logon,
+                    operating_system_id,
                     name
                 ]
                 
@@ -289,8 +422,8 @@ class SQLManager:
                     name, dns_hostname, distinguished_name, description,
                     is_enabled, is_domain_controller, user_account_control,
                     primary_group_id, sam_account_name, last_logon_timestamp, 
-                    created_date, last_sync_ad, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), GETDATE())
+                    created_date, operating_system_id, last_sync_ad, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), GETDATE())
                 """
                 params = [
                     name,
@@ -303,7 +436,8 @@ class SQLManager:
                     primary_group_id,
                     sam_account_name,
                     last_logon,
-                    created_date
+                    created_date,
+                    operating_system_id
                 ]
                 
                 self.execute_query(insert_query, params, fetch=False)
@@ -552,9 +686,15 @@ class SQLManager:
                         row_exists = False
 
                 if warranty_data.get('success'):
+                    # Para casos de sucesso, service_tag é obrigatório
+                    service_tag = warranty_data.get('service_tag')
+                    if not service_tag or service_tag.strip() == '':
+                        logger.warning(f'Cannot save warranty data without valid service_tag for computer_id {computer_id}')
+                        return True  # Retorna True para não causar erro, mas não insere
+                    
                     # Build a map of candidate columns -> values
                     candidates = {
-                        'service_tag': warranty_data.get('service_tag'),
+                        'service_tag': service_tag,
                         'service_tag_clean': warranty_data.get('service_tag_clean'),
                         'warranty_start_date': warranty_data.get('warranty_start_date'),
                         'warranty_end_date': warranty_data.get('warranty_end_date'),
@@ -592,7 +732,7 @@ class SQLManager:
                         params.append(computer_id)
                         cursor.execute(update_query, tuple(params))
                     else:
-                        # INSERT: build column list dynamically
+                        # INSERT: build column list dynamically                        
                         insert_cols = ['computer_id'] if _has('computer_id') else []
                         insert_vals = [computer_id] if _has('computer_id') else []
                         for col, val in to_set.items():
@@ -641,12 +781,19 @@ class SQLManager:
                         update_query = "UPDATE dell_warranty SET last_updated = GETDATE(), cache_expires_at = ?, last_error = ? WHERE computer_id = ?"
                         params = (retry_time, f"{warranty_data.get('code', 'ERROR')}: {warranty_data.get('error', 'Unknown error')}", computer_id)
                         cursor.execute(update_query, params)
-                    elif not row_exists and _has('computer_id') and _has('last_error'):
-                        insert_cols = ['computer_id', 'last_updated', 'cache_expires_at', 'last_error']
-                        placeholders = ', '.join(['?'] * len(insert_cols))
-                        insert_query = f"INSERT INTO dell_warranty ({', '.join(insert_cols)}) VALUES ({placeholders})"
-                        params = (computer_id, datetime.now(), retry_time, f"{warranty_data.get('code', 'ERROR')}: {warranty_data.get('error', 'Unknown error')}")
-                        cursor.execute(insert_query, params)
+                    elif not row_exists:
+                        # Para inserir erro quando não existe registro, precisamos de service_tag
+                        # Usar 'UNKNOWN' como valor padrão para service_tag em casos de erro
+                        if _has('computer_id') and _has('service_tag') and _has('last_error'):
+                            insert_cols = ['computer_id', 'service_tag', 'last_updated', 'cache_expires_at', 'last_error']
+                            error_service_tag = warranty_data.get('service_tag') or 'UNKNOWN'
+                            params = (computer_id, error_service_tag, datetime.now(), retry_time, f"{warranty_data.get('code', 'ERROR')}: {warranty_data.get('error', 'Unknown error')}")
+                            placeholders = ', '.join(['?'] * len(insert_cols))
+                            insert_query = f"INSERT INTO dell_warranty ({', '.join(insert_cols)}) VALUES ({placeholders})"
+                            cursor.execute(insert_query, params)
+                        else:
+                            # Se não podemos inserir erro devido à falta de colunas necessárias, apenas log
+                            logger.warning('Cannot record warranty error due to missing required columns for computer_id %s', computer_id)
                     else:
                         # No useful columns to record error; log and skip
                         logger.warning('No matching columns to record warranty error for computer_id %s', computer_id)

@@ -12,6 +12,78 @@ class BackgroundSyncService:
         self.sync_thread = None
         self.sync_running = False
         self.last_sync = None
+    
+    def _update_operating_systems_for_all_computers(self):
+        """Função helper para atualizar sistemas operacionais de todos os computadores"""
+        try:
+            logger.info('🖥️ Atualizando sistemas operacionais...')
+            
+            # Buscar todos os computadores do AD
+            computers = ad_manager.get_computers()
+            
+            updated_count = 0
+            error_count = 0
+            
+            for computer in computers:
+                try:
+                    # Mapear sistema operacional
+                    operating_system_id = None
+                    os_name = computer.get('os')  # Campo correto do AD
+                    os_version = computer.get('osVersion')  # Campo correto do AD
+                    
+                    if os_name:
+                        operating_system_id = sql_manager.get_or_create_operating_system(
+                            os_name,
+                            os_version
+                        )
+                    
+                    # Atualizar apenas o operating_system_id
+                    if operating_system_id:
+                        conn = sql_manager.get_connection()
+                        cursor = conn.cursor()
+                        update_query = """
+                        UPDATE computers 
+                        SET operating_system_id = ?,
+                            last_sync_ad = GETDATE(),
+                            updated_at = GETDATE()
+                        WHERE name = ?
+                        """
+                        cursor.execute(update_query, operating_system_id, computer.get('name'))
+                        
+                        if cursor.rowcount > 0:
+                            updated_count += 1
+                        
+                        # Commit individual para garantir persistência
+                        conn.commit()
+                        cursor.close()
+                    
+                except Exception as e:
+                    error_count += 1
+                    logger.error(f'Erro ao atualizar OS de {computer.get("name", "desconhecido")}: {e}')
+            
+            # Removido: sql_manager.get_connection().commit()  # Commit já feito individualmente
+            logger.info(f'✅ Atualização de OS concluída: {updated_count} atualizados, {error_count} erros')
+            
+            return {
+                'success': True,
+                'stats': {
+                    'updated_count': updated_count,
+                    'error_count': error_count,
+                    'total_processed': updated_count + error_count
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f'Erro geral na atualização de OS: {e}')
+            return {
+                'success': False,
+                'error': str(e),
+                'stats': {
+                    'updated_count': 0,
+                    'error_count': 0,
+                    'total_processed': 0
+                }
+            }
 
     def start_background_sync(self):
         if not self.sync_running:
@@ -85,6 +157,16 @@ class BackgroundSyncService:
             duration = (self.last_sync - start_time).total_seconds()
             logger.info(f'Sincronização incremental concluída em {duration:.1f}s - {stats["computers_found"]} encontrados, {stats["computers_added"]} adicionados, {stats["computers_updated"]} atualizados')
             
+            # Atualizar sistemas operacionais automaticamente
+            logger.info('🔄 Executando atualização automática de sistemas operacionais...')
+            os_result = self._update_operating_systems_for_all_computers()
+            if os_result['success']:
+                stats['os_updated'] = os_result['stats']['updated_count']
+                logger.info(f'✅ {os_result["stats"]["updated_count"]} sistemas operacionais atualizados')
+            else:
+                stats['os_updated'] = 0
+                logger.warning('⚠️ Erro na atualização automática de OS')
+            
             return stats
         except Exception as e:
             logger.exception('Erro na sincronização incremental')
@@ -133,6 +215,16 @@ class BackgroundSyncService:
             self.last_sync = datetime.now()
             duration = (self.last_sync - start_time).total_seconds()
             logger.info(f'Sincronização completa concluída em {duration:.1f}s - {stats["computers_deleted"]} removidos, {stats["computers_added"]} adicionados')
+            
+            # Atualizar sistemas operacionais automaticamente após reset
+            logger.info('🔄 Executando atualização automática de sistemas operacionais...')
+            os_result = self._update_operating_systems_for_all_computers()
+            if os_result['success']:
+                stats['os_updated'] = os_result['stats']['updated_count']
+                logger.info(f'✅ {os_result["stats"]["updated_count"]} sistemas operacionais mapeados')
+            else:
+                stats['os_updated'] = 0
+                logger.warning('⚠️ Erro na atualização automática de OS')
             
             return stats
         except Exception as e:
