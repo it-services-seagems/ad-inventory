@@ -154,3 +154,153 @@ class DellWarrantyAPI:
 
 
 dell_api = DellWarrantyAPI()
+
+
+class DellWarrantyManager:
+    """Manager que combina busca de garantia Dell com salvamento no banco de dados"""
+    
+    def __init__(self):
+        self.dell_api = DellWarrantyAPI()
+        # Import here to avoid circular imports
+        from .sql import SQLManager
+        self.sql_manager = SQLManager()
+        
+    def get_warranty_info_with_database_save(self, service_tag, force_api=False):
+        """
+        Busca garantia e salva automaticamente na tabela dell_warranty
+        
+        Args:
+            service_tag: Service tag para buscar
+            force_api: Se True, sempre busca da API da Dell. Se False, pode usar cache.
+        """
+        try:
+            # Se force_api=False, primeiro tentar buscar da tabela (para uso interno/background)
+            if not force_api:
+                try:
+                    cached_data = self.sql_manager.get_warranty_from_database(service_tag)
+                    if cached_data and not cached_data.get('expired', False):
+                        logger.debug(f"📦 Using cached warranty data for {service_tag}")
+                        return self._convert_db_to_api_format(cached_data)
+                except Exception as e:
+                    logger.debug(f"Cache lookup failed for {service_tag}, falling back to API: {e}")
+            
+            # Buscar dados frescos da Dell API
+            logger.debug(f"🌐 Fetching fresh warranty data from Dell API for {service_tag}")
+            warranty_data = self.dell_api.get_warranty_info(service_tag)
+            
+            if warranty_data and not warranty_data.get('error'):
+                # Converter para formato padronizado para o banco
+                db_warranty_info = self._convert_warranty_to_db_format(warranty_data)
+                
+                # Salvar na tabela dell_warranty
+                self.sql_manager.save_warranty_to_database(service_tag, db_warranty_info)
+                
+                # Retornar dados originais para compatibilidade
+                return warranty_data
+            else:
+                # Mesmo com erro, tentar salvar o erro na tabela
+                error_info = {
+                    'error': warranty_data.get('error', 'Erro desconhecido'),
+                    'service_tag': service_tag
+                }
+                try:
+                    self.sql_manager.save_warranty_to_database(service_tag, error_info)
+                except:
+                    pass  # Se não conseguir salvar erro, continua
+                
+                return warranty_data
+                
+        except Exception as e:
+            logger.error(f"Erro no DellWarrantyManager para {service_tag}: {e}")
+            return {'error': f'Erro interno: {e}', 'code': 'INTERNAL_ERROR'}
+    
+    def get_warranty_info_force_api(self, service_tag):
+        """Sempre busca dados frescos da API da Dell (para botão 'Atualizar')"""
+        return self.get_warranty_info_with_database_save(service_tag, force_api=True)
+    
+    def get_warranty_info_cached_first(self, service_tag):
+        """Tenta cache primeiro, API como fallback (para uso em background)"""
+        return self.get_warranty_info_with_database_save(service_tag, force_api=False)
+    
+    def _convert_db_to_api_format(self, db_data):
+        """Converte dados da tabela dell_warranty para formato da API"""
+        try:
+            # Converter de volta para o formato esperado pela API
+            api_format = {
+                'serviceTag': db_data.get('service_tag', ''),
+                'serviceTagLimpo': db_data.get('service_tag', ''),
+                'productLineDescription': db_data.get('product_line_description', ''),
+                'systemDescription': db_data.get('system_description', ''),
+                'modelo': db_data.get('product_line_description', ''),
+                'dataExpiracao': None,
+                'status': 'Desconhecido',
+                'entitlements': []
+            }
+            
+            # Converter data de expiração se disponível
+            warranty_end_date = db_data.get('warranty_end_date')
+            if warranty_end_date:
+                try:
+                    from datetime import datetime
+                    if isinstance(warranty_end_date, str):
+                        end_date = datetime.strptime(warranty_end_date, '%Y-%m-%d')
+                    else:
+                        end_date = warranty_end_date
+                    
+                    api_format['dataExpiracao'] = end_date.strftime('%d/%m/%Y')
+                    
+                    # Calcular status baseado na data
+                    now = datetime.now()
+                    if end_date > now:
+                        api_format['status'] = 'Em garantia'
+                    else:
+                        api_format['status'] = 'Expirado'
+                        
+                except:
+                    pass
+            
+            return api_format
+            
+        except Exception as e:
+            logger.error(f"Erro ao converter dados DB para API: {e}")
+            return {}
+    
+    def _convert_warranty_to_db_format(self, warranty_data):
+        """Converte dados da Dell para formato da tabela dell_warranty"""
+        try:
+            # Mapear campos da resposta Dell para campos da tabela
+            db_format = {
+                'service_tag': warranty_data.get('serviceTag', ''),
+                'system_description': warranty_data.get('systemDescription', ''),
+                'product_line_description': warranty_data.get('productLineDescription', ''),
+                'order_number': '',  # Pode não estar disponível na resposta simplificada
+                'purchase_date': None,
+                'ship_date': None,
+                'warranty_end_date': None
+            }
+            
+            # Converter data de expiração se disponível
+            data_expiracao = warranty_data.get('dataExpiracao')
+            if data_expiracao:
+                try:
+                    # Converter de DD/MM/YYYY para YYYY-MM-DD
+                    day, month, year = data_expiracao.split('/')
+                    db_format['warranty_end_date'] = f"{year}-{month}-{day}"
+                except:
+                    logger.warning(f"Erro ao converter data: {data_expiracao}")
+            
+            return db_format
+            
+        except Exception as e:
+            logger.error(f"Erro ao converter warranty data: {e}")
+            return {}
+    
+    async def get_warranty_info_async(self, service_tag):
+        """Versão async para uso em scripts"""
+        import asyncio
+        # Como a Dell API é síncrona, executar em thread pool
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.get_warranty_info_with_database_save, service_tag)
+
+
+dell_warranty_manager = DellWarrantyManager()

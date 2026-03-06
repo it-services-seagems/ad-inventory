@@ -149,7 +149,17 @@ class SQLManager:
                 logger.exception('Failed to inspect computers columns; falling back to minimal query')
                 columns = []
 
+            # Inspect dell_warranty table columns (optional)
+            try:
+                with self.get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT TOP 0 * FROM dell_warranty")
+                    dell_columns = [c[0].lower() for c in cur.description] if cur.description else []
+            except Exception:
+                dell_columns = []
+
             has = lambda name: name.lower() in columns
+            has_dw = lambda name: name.lower() in dell_columns
 
             select_cols = [
                 'c.id', 'c.name', 'c.dns_hostname', 'c.distinguished_name as dn',
@@ -162,6 +172,15 @@ class SQLManager:
                 select_cols.append('c.ip_address')
             if has('mac_address'):
                 select_cols.append('c.mac_address')
+            # Possible columns that store hardware model information in different schemas
+            if has('model'):
+                select_cols.append('c.model')
+            if has('product_model'):
+                select_cols.append('c.product_model')
+            if has('system_model'):
+                select_cols.append('c.system_model')
+            if has('modelo'):
+                select_cols.append('c.modelo')
             if has('usuario_atual'):
                 select_cols.append('c.usuario_atual')
             if has('usuario_anterior'):
@@ -174,6 +193,11 @@ class SQLManager:
             # OS and organization joins are optional but safe to include; OS fields come from separate table
             select_cols.append('os.name as os')
             select_cols.append('os.version as osVersion')
+            # If the warranty table exists, include a few useful warranty columns
+            if dell_columns:
+                select_cols.append('dw.product_line_description as product_line_description')
+                select_cols.append('dw.warranty_end_date as warranty_end_date')
+                select_cols.append('dw.warranty_status as warranty_status')
             select_clause = ',\n            '.join(select_cols)
 
             base_query = f"""
@@ -182,6 +206,7 @@ class SQLManager:
             FROM computers c
             LEFT JOIN organizations o ON c.organization_id = o.id
             LEFT JOIN operating_systems os ON c.operating_system_id = os.id
+            { 'LEFT JOIN dell_warranty dw ON c.id = dw.computer_id' if dell_columns else '' }
             WHERE c.is_domain_controller = 0
             """
 
@@ -190,7 +215,18 @@ class SQLManager:
             else:
                 query = base_query + " ORDER BY c.name"
 
-            rows = self.execute_query(query)
+            try:
+                rows = self.execute_query(query)
+            except Exception:
+                logger.exception('Primary computers query failed; falling back to minimal list')
+                # Fallback: return a minimal list of computers (id, name)
+                try:
+                    rows = self.execute_query('SELECT id, name FROM computers ORDER BY name')
+                    # normalize to expected structure
+                    return [{'id': r.get('id'), 'name': r.get('name')} for r in rows]
+                except Exception:
+                    logger.exception('Fallback minimal computers query also failed')
+                    return []
             computers = []
             for r in rows:
                 try:
@@ -207,14 +243,21 @@ class SQLManager:
                         'userAccountControl': r.get('user_account_control') or 0,
                         'primaryGroupID': r.get('primary_group_id') or 515,
                         'dnsHostName': r.get('dns_hostname') or '',
-                        'ipAddress': r.get('ip_address') if has('ip_address') else '',
-                        'macAddress': r.get('mac_address') if has('mac_address') else '',
+                            'ipAddress': r.get('ip_address') if has('ip_address') else '',
+                            'macAddress': r.get('mac_address') if has('mac_address') else '',
+                            # Normalize model field from multiple possible column names
+                            'model': (r.get('model') or r.get('product_model') or r.get('system_model') or r.get('modelo') or '') if any([has('model'), has('product_model'), has('system_model'), has('modelo')]) else '',
                         'usuarioAtual': r.get('usuario_atual') if has('usuario_atual') else '',
                         'usuarioAnterior': r.get('usuario_anterior') if has('usuario_anterior') else '',
                         'inventoryStatus': r.get('status') if has('status') else '',
                         'location': r.get('location') if has('location') else '',
                         'organizationName': r.get('organization_name') or '',
                         'organizationCode': r.get('organization_code') or ''
+                        ,
+                        # include warranty/product line fields if present
+                        'product_line_description': r.get('product_line_description') if dell_columns else '',
+                        'warranty_end_date': _format_dt(r.get('warranty_end_date')) if (dell_columns and r.get('warranty_end_date')) else None,
+                        'warranty_status': r.get('warranty_status') if dell_columns else ''
                     })
                 except Exception:
                     logger.exception('Error processing computer row')
@@ -655,9 +698,41 @@ class SQLManager:
             logger.exception('get_computers_for_warranty_update failed')
             return []
 
-    def save_warranty_to_database(self, computer_id, warranty_data):
-        """Save warranty information to database (baseado no debug_c1wsb92.py)"""
+    def save_warranty_to_database(self, computer_id_or_service_tag, warranty_data):
+        """Save warranty information to database.
+
+        Accepts either an integer `computer_id` or a service-tag string. If a
+        service-tag is provided the method will try to resolve the matching
+        computer id in `computers`. This prevents attempts to insert a
+        non-integer into the `computer_id` FK column.
+        """
         try:
+            # Normalize: if a non-int service tag was passed, try to resolve it
+            computer_id = None
+            try:
+                # if caller passed an int-like value, keep it
+                if isinstance(computer_id_or_service_tag, int):
+                    computer_id = computer_id_or_service_tag
+                else:
+                    # try convert if passed numeric string
+                    try:
+                        computer_id = int(computer_id_or_service_tag)
+                    except Exception:
+                        # treat as service_tag string and attempt lookup
+                        service_tag = str(computer_id_or_service_tag).strip()
+                        if service_tag:
+                            # try exact match on computer name, then contains
+                            rows = self.execute_query("SELECT TOP 1 id FROM computers WHERE UPPER(name) = UPPER(?)", params=(service_tag,))
+                            if rows:
+                                computer_id = rows[0].get('id')
+                            else:
+                                rows = self.execute_query("SELECT TOP 1 id FROM computers WHERE UPPER(name) LIKE UPPER(?)", params=(f"%{service_tag}%",))
+                                if rows:
+                                    computer_id = rows[0].get('id')
+
+            except Exception:
+                computer_id = None
+
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 # Discover which columns exist in the table to be resilient across schema versions
@@ -674,14 +749,13 @@ class SQLManager:
                 def _has(col):
                     return col.lower() in cols_set
 
-                # Helper to check existence of a row by computer_id
+                # Helper to check existence of a row by computer_id (only if we have a numeric id)
                 row_exists = False
-                if _has('computer_id'):
+                if computer_id is not None and _has('computer_id'):
                     try:
                         cursor.execute("SELECT id FROM dell_warranty WHERE computer_id = ?", (computer_id,))
                         row_exists = cursor.fetchone() is not None
                     except Exception:
-                        # If this fails, keep going but mark as not existing
                         logger.exception('Failed to check existing dell_warranty row')
                         row_exists = False
 
@@ -746,6 +820,11 @@ class SQLManager:
                             # ensure cache_expires_at present if available (could be None)
                             insert_cols.append('cache_expires_at')
                             insert_vals.append(warranty_data.get('cache_expires_at'))
+
+                        # ensure we don't try to insert a non-int computer_id into an int column
+                        if 'computer_id' in insert_cols and computer_id is None:
+                            insert_cols.remove('computer_id')
+                            insert_vals = [v for i, v in enumerate(insert_vals) if insert_cols and i < len(insert_vals)]
 
                         if not insert_cols:
                             logger.info('No matching columns to insert into dell_warranty; skipping insert')

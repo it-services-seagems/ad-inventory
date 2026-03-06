@@ -166,15 +166,19 @@ async def vincular_usuario_computador(payload: dict):
         nome = payload.get('nome')
         email_corporativo = payload.get('email_corporativo')
         
-        if not all([computer_name, matricula, email_corporativo]):
-            raise HTTPException(status_code=400, detail="computer_name, matricula e email_corporativo são obrigatórios")
+        # `matricula` is optional in the current UI. Require only computer_name and corporate email.
+        if not computer_name or not email_corporativo:
+            raise HTTPException(status_code=400, detail="computer_name e email_corporativo são obrigatórios")
         
         # Extrair e formatar nome completo do email
         nome_formatado, erro_msg = extrair_nome_completo_email(email_corporativo)
         if erro_msg:
             raise HTTPException(status_code=400, detail=erro_msg)
         
-        logger.info(f"Vinculando usuário {nome_formatado} (matricula: {matricula}) ao computador {computer_name}")
+        if matricula:
+            logger.info(f"Vinculando usuário {nome_formatado} (matricula: {matricula}) ao computador {computer_name}")
+        else:
+            logger.info(f"Vinculando usuário {nome_formatado} (sem matrícula) ao computador {computer_name}")
         
         # Verificar se o computador existe
         computer_query = "SELECT id, Usuario_Atual, Usuario_Anterior FROM computers WHERE name = ?"
@@ -228,7 +232,7 @@ async def vincular_usuario_computador(payload: dict):
                 'usuario_anterior': novo_usuario_anterior,
                 'status_atualizado': 'Em uso' if is_shq_computer else None,
                 'funcionario': {
-                    'matricula': matricula,
+                    **({'matricula': matricula} if matricula else {}),
                     'nome': nome,
                     'email_corporativo': email_corporativo
                 }

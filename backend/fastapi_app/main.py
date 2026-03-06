@@ -14,6 +14,11 @@ app = FastAPI(title="AD Inventory FastAPI",
               description="Backend para o sistema de inventário de computadores AD  ",
               version="0.1")
 
+# Add root endpoint for health check
+@app.get("/")
+async def root():
+    return {"message": "AD Inventory API is running", "status": "healthy"}
+
 # CORS - mirror the permissive dev settings used previously
 app.add_middleware(
     CORSMiddleware,

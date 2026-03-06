@@ -1,8 +1,136 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue, startTransition, memo } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { Search, RefreshCw, Eye, Calendar, Monitor, Server, Filter, ChevronDown, CheckCircle, XCircle, Database, Clock, ArrowLeft, Power, Loader2, AlertCircle, Building2, Shield, ShieldAlert, ShieldCheck, ShieldOff, ChevronUp, ArrowUpDown, RotateCcw } from 'lucide-react'
-import api from '../services/api'
+import api, { apiMethods } from '../services/api'
 import logo_seagems from '../assets/LogoSeagems.png'
+
+// Componente de linha otimizado com React.memo
+const ComputerTableRow = memo(({ computer, mapIndex, onUnassign, onToggle }) => {
+  const WarrantyIcon = computer.warrantyStatus.icon
+  
+  const handleRowClick = React.useCallback(() => {
+    window.location.href = `/computers/${computer.name}`
+  }, [computer.name])
+  
+  const handleUnassignClick = React.useCallback((e) => {
+    e.stopPropagation()
+    onUnassign(computer)
+  }, [computer, onUnassign])
+  
+  return (
+    <tr 
+      key={computer.id ? `${computer.id}-${computer.index ?? mapIndex}` : `${computer.name}-${computer.index ?? mapIndex}`} 
+      className="hover:bg-blue-50 transition-colors cursor-pointer group"
+      onClick={handleRowClick}
+      title={`Clique para ver detalhes de ${computer.name}`}
+      style={{ height: '65px' }} // Fixed height for virtualization
+    >
+      <td className="px-4 py-3 whitespace-nowrap">
+        <div className="flex items-center">
+          {computer.isEnabled ? (
+            <div className="flex items-center text-green-600">
+              <CheckCircle className="h-4 w-4 mr-1" />
+              <span className="text-xs font-medium">Ativa</span>
+            </div>
+          ) : (
+            <div className="flex items-center text-red-600">
+              <XCircle className="h-4 w-4 mr-1" />
+              <span className="text-xs font-medium">Inativa</span>
+            </div>
+          )}
+        </div>
+      </td>
+
+      <td className="px-4 py-3">
+        <div className="flex items-center">
+          {computer.ou.code === 'CLOUD' || (computer.os && computer.os.toLowerCase().includes('server')) ? (
+            <Server className="h-4 w-4 text-gray-400 mr-2 flex-shrink-0" />
+          ) : (
+            <Monitor className="h-4 w-4 text-gray-400 mr-2 flex-shrink-0" />
+          )}
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-gray-900 truncate">{computer.name}</div>
+            {computer.description && (<div className="text-xs text-gray-500 truncate">{computer.description}</div>)}
+            {computer.dnsHostName && computer.dnsHostName !== computer.name && (<div className="text-xs text-blue-600 truncate">DNS: {computer.dnsHostName}</div>)}
+          </div>
+        </div>
+      </td>
+
+      <td className="px-4 py-3">
+        <div className="text-sm text-gray-900 truncate">
+          {computer.model || computer.modelo || computer.product_line_description || computer.productLineDescription || '—'}
+        </div>
+        {computer.modelDetails?.manufacturer && (
+          <div className="text-xs text-gray-500">{computer.modelDetails.manufacturer}</div>
+        )}
+        {computer.modelDetails?.family && (
+          <div className="text-xs text-blue-600">Família: {computer.modelDetails.family}</div>
+        )}
+      </td>
+
+      <td className="px-4 py-3">
+        <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${computer.ou.bgColor} ${computer.ou.color}`}>
+          {computer.ou.code}
+        </span>
+      </td>
+
+      <td className="px-4 py-3">
+        <div className="text-sm text-gray-900 truncate">{computer.os || '—'}</div>
+        {computer.osVersion && (<div className="text-xs text-gray-500 truncate">{computer.osVersion}</div>)}
+      </td>
+
+      <td className="px-4 py-3">
+        <div className="flex items-center space-x-1">
+          <WarrantyIcon className={`h-3 w-3 ${computer.warrantyStatus.color}`} />
+          <span className={`text-xs px-1 rounded ${computer.warrantyStatus.bgColor} ${computer.warrantyStatus.color}`}>
+            {computer.warrantyStatus.text}
+          </span>
+        </div>
+      </td>
+
+      <td className="px-4 py-3">
+        <span className={`inline-flex px-2 py-1 text-xs rounded-full ${computer.loginStatus.bgColor} ${computer.loginStatus.color}`}>
+          {computer.loginStatus.text}
+        </span>
+      </td>
+
+      <td className="px-4 py-3">
+        <div className="text-sm text-gray-900 truncate">{computer.currentUser || '—'}</div>
+        {computer.previousUser && (<div className="text-xs text-gray-500 truncate">Anterior: {computer.previousUser}</div>)}
+      </td>
+
+      <td className="px-4 py-3 sticky right-32 bg-white group-hover:bg-blue-50">
+        <div className="flex items-center space-x-2">
+          {onToggle && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onToggle(computer, computer.isEnabled ? 'disable' : 'enable') }}
+              className={`text-xs px-2 py-1 rounded border transition-colors ${computer.isEnabled ? 'text-red-600 border-red-200 hover:text-red-800 hover:border-red-400' : 'text-green-600 border-green-200 hover:text-green-800 hover:border-green-400'}`}
+              title={computer.isEnabled ? 'Desativar máquina' : 'Ativar máquina'}
+            >
+              {computer.isEnabled ? 'Desativar' : 'Ativar'}
+            </button>
+          )}
+
+          {computer.currentUser && (
+            <button
+              onClick={handleUnassignClick}
+              className="text-red-600 hover:text-red-800 text-xs px-2 py-1 rounded border border-red-200 hover:border-red-400 transition-colors"
+              title="Desvincular usuário"
+            >
+              Desvincular
+            </button>
+          )}
+        </div>
+      </td>
+
+      <td className="px-4 py-3 sticky right-0 bg-white group-hover:bg-blue-50">
+        <div className="text-xs text-gray-500">
+          {computer.created ? new Date(computer.created).toLocaleDateString('pt-BR') : '—'}
+        </div>
+      </td>
+    </tr>
+  )
+})
 
 const Computers = () => {
   const location = useLocation()
@@ -16,14 +144,15 @@ const Computers = () => {
   const [syncCompleteLoading, setSyncCompleteLoading] = useState(false)
   const [lastFetchTime, setLastFetchTime] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
-  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('')
+  const deferredSearchTerm = useDeferredValue(searchTerm)
   const [isSearching, setIsSearching] = useState(false)
   const [filters, setFilters] = useState({
     status: 'all',
     os: 'all', 
     lastLogin: 'all',
     ou: 'all',
-    warranty: 'all'
+    warranty: 'all',
+    model: 'all'
   })
   // additional advanced filter fields
   // lastLoginDays: 'all' | '7' | '30' | '60' | '90' | '120+'
@@ -51,6 +180,13 @@ const Computers = () => {
   const [processedData, setProcessedData] = useState(null)
   const [isProcessing, setIsProcessing] = useState(false)
   
+  // Estados de virtualização e paginação
+  const [virtualizedData, setVirtualizedData] = useState([])
+  const [visibleRange, setVisibleRange] = useState({ start: 0, end: 50 })
+  const [totalCount, setTotalCount] = useState(0)
+  const VIRTUAL_ROW_HEIGHT = 65 // altura estimada de cada linha
+  const VIRTUAL_OVERSCAN = 10 // linhas extras para renderizar fora da tela
+  
   // Estados para ativar/desativar máquinas
   const [toggleStatusLoading, setToggleStatusLoading] = useState(new Set())
   const [statusMessages, setStatusMessages] = useState(new Map())
@@ -71,29 +207,15 @@ const Computers = () => {
   
   // Configurações
   const CACHE_DURATION = 10 * 60 * 1000 // 10 minutos
-  const SEARCH_DEBOUNCE_MS = 300
 
-  // Debounce para pesquisa
+  // Modern search with useDeferredValue - no manual debouncing needed
   useEffect(() => {
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current)
-    }
-
-    if (searchTerm !== debouncedSearchTerm) {
+    if (searchTerm !== deferredSearchTerm) {
       setIsSearching(true)
-    }
-
-    searchTimeoutRef.current = setTimeout(() => {
-      setDebouncedSearchTerm(searchTerm)
+    } else {
       setIsSearching(false)
-    }, SEARCH_DEBOUNCE_MS)
-
-    return () => {
-      if (searchTimeoutRef.current) {
-        clearTimeout(searchTimeoutRef.current)
-      }
     }
-  }, [searchTerm, debouncedSearchTerm])
+  }, [searchTerm, deferredSearchTerm])
 
   // Função para determinar a OU baseada no nome da máquina (memoizada)
   const getComputerOU = useCallback((computerName) => {
@@ -489,7 +611,8 @@ const Computers = () => {
   const processComputersData = useCallback((computersData) => {
     if (!computersData || computersData.length === 0) return null
     
-    console.time('🔧 Processing computers data')
+    // Only log processing time in development
+    const startTime = process.env.NODE_ENV === 'development' ? performance.now() : 0
     setIsProcessing(true)
     
         const processed = {
@@ -546,12 +669,20 @@ const Computers = () => {
         const warranty = warrantyData.get(computer.id)
         const warrantyStatus = getWarrantyStatus(warranty)
         
+        // Get model from warranty data (Dell guarantees contain the model info)
+        const modelFromWarranty = warranty?.system_description || warranty?.model || warranty?.product_line_description || warranty?.productLineDescription || ''
+        const finalModel = computer.model || computer.modelo || modelFromWarranty || ''
+        
         const searchableText = [
           computer.name,
           computer.os,
           computer.description || '',
           computer.dnsHostName || '',
           computer.osVersion || '',
+          finalModel,
+          computer.modelDetails?.name || '',
+          computer.modelDetails?.manufacturer || '',
+          computer.modelDetails?.family || '',
           ou.name,
           ou.code,
           warrantyStatus.text,
@@ -559,8 +690,11 @@ const Computers = () => {
           computer.usuarioAnterior || ''
         ].join(' ').toLowerCase()
         
+        // Debug removido para não interferir no processamento
+        
         return {
           ...computer,
+          model: finalModel, // Ensure model is available on the computer object
           index,
           isEnabled,
           loginStatus,
@@ -574,6 +708,14 @@ const Computers = () => {
       }),
       
       uniqueOSList: [...new Set(computersData.map(c => c.os).filter(os => os && os !== 'N/A'))].sort(),
+      uniqueModelList: [...new Set(computersData.map(c => {
+        // Get model from warranty data first, then fallback to computer data
+        const warranty = warrantyData.get(c.id)
+        const modelFromWarranty = warranty?.system_description || warranty?.model || warranty?.product_line_description || warranty?.productLineDescription || ''
+        const modelName = c.model || c.modelo || modelFromWarranty || ''
+        const cleanModel = modelName.trim()
+        return cleanModel && cleanModel !== 'N/A' && cleanModel !== 'null' && cleanModel !== 'undefined' ? cleanModel : null
+      }).filter(Boolean))].sort(),
       
       uniqueOUList: (() => {
         const ouCounts = {}
@@ -650,7 +792,55 @@ const Computers = () => {
       processedAt: Date.now()
     }
     
-    console.timeEnd('🔧 Processing computers data')
+    // Log only in development
+    if (process.env.NODE_ENV === 'development') {
+      const endTime = performance.now()
+      console.log(`🔧 Processing computers data: ${(endTime - startTime).toFixed(2)}ms`)
+      
+      // Debug: Verificar modelos disponíveis
+      const modelsFound = computersData.filter(c => {
+        const warranty = warrantyData.get(c.id)
+        const modelFromWarranty = warranty?.system_description || warranty?.model || ''
+        const finalModel = c.model || c.modelo || modelFromWarranty || ''
+        return finalModel && finalModel !== 'N/A'
+      })
+      console.log(`🖥️ Computadores com modelo: ${modelsFound.length}/${computersData.length}`)
+      if (modelsFound.length > 0) {
+        console.log(`📋 Primeiros 5 modelos: ${modelsFound.slice(0, 5).map(c => {
+          const warranty = warrantyData.get(c.id)
+          const modelFromWarranty = warranty?.system_description || warranty?.model || ''
+          return c.model || c.modelo || modelFromWarranty || 'N/A'
+        }).join(', ')}`)
+      }
+      
+      // Debug: Verificar se há dados de OptiPlex
+      const optiplexComputers = computersData.filter(c => {
+        const warranty = warrantyData.get(c.id)
+        const modelFromWarranty = warranty?.system_description || warranty?.model || ''
+        const finalModel = (c.model || c.modelo || modelFromWarranty || '').toLowerCase()
+        return finalModel.includes('optiplex') || finalModel.includes('opt')
+      })
+      console.log(`💻 Computadores OptiPlex encontrados: ${optiplexComputers.length}`)
+      if (optiplexComputers.length > 0) {
+        console.log(`🔍 OptiPlex: ${optiplexComputers.slice(0, 3).map(c => {
+          const warranty = warrantyData.get(c.id)
+          const modelFromWarranty = warranty?.system_description || warranty?.model || ''
+          const finalModel = c.model || c.modelo || modelFromWarranty || 'N/A'
+          return `${c.name}:${finalModel}`
+        }).join(', ')}`)
+      }
+      
+      // Debug: Verificar dados de garantia
+      console.log(`🛡️ Dados de garantia carregados: ${warrantyData.size} registros`)
+      if (warrantyData.size > 0) {
+        const warrantyArray = Array.from(warrantyData.values())
+        const withSystemDesc = warrantyArray.filter(w => w.system_description && w.system_description !== 'N/A')
+        console.log(`📊 Garantias com system_description: ${withSystemDesc.length}/${warrantyArray.length}`)
+        if (withSystemDesc.length > 0) {
+          console.log(`🏷️ Primeiros 3 system_description: ${withSystemDesc.slice(0, 3).map(w => w.system_description).join(', ')}`)
+        }
+      }
+    }
     setIsProcessing(false)
     
     return processed
@@ -683,25 +873,26 @@ const Computers = () => {
         return computer.isEnabled ? 0 : 1
       case 'created':
         return computer.created ? new Date(computer.created).getTime() : 0
+      case 'model':
+        return (computer.model || computer.modelo || '').toLowerCase()
       default:
         return ''
     }
   }, [])
-
-  // Função de busca e filtro ultra-otimizada com debounce e ordenação
+  
+  // Modern optimized filter with deferred search and chunked processing
   const filteredComputers = useMemo(() => {
     if (!processedData) return []
     
-    const hasSearch = debouncedSearchTerm.trim().length > 0
+    const hasSearch = deferredSearchTerm.trim().length > 0
     const hasFilters = Object.values(filters).some(f => f !== 'all')
     
-    console.time('🚀 Filter and sort performance')
-    
-    let filtered = processedData.computersWithIndex
+    // Work on a shallow copy to avoid mutating processedData.computersWithIndex (React state)
+    let filtered = processedData.computersWithIndex.slice()
     
     // Aplicar filtros se necessário
     if (hasSearch || hasFilters) {
-      const searchLower = debouncedSearchTerm.toLowerCase()
+      const searchLower = deferredSearchTerm.toLowerCase()
       
       filtered = processedData.computersWithIndex.filter(computer => {
         if (hasSearch && !computer.searchableText.includes(searchLower)) {
@@ -731,6 +922,11 @@ const Computers = () => {
 
         if (filters.warranty !== 'all') {
           if (computer.warrantyStatus.status !== filters.warranty) return false
+        }
+
+        if (filters.model !== 'all') {
+          const modelValue = (computer.model || computer.modelo || '').toLowerCase()
+          if (!modelValue.includes(String(filters.model).toLowerCase())) return false
         }
 
         // Advanced filters: lastLoginDays
@@ -787,11 +983,60 @@ const Computers = () => {
       return sortConfig.direction === 'asc' ? comparison : -comparison
     })
     
-    console.timeEnd('🚀 Filter and sort performance')
-    console.log(`🔍 Filtered: ${filtered.length}/${processedData.computersWithIndex.length}, Sorted by: ${sortConfig.key} ${sortConfig.direction}`)
+    // Debug log for filtering
+    if (hasSearch) {
+      console.log(`🔍 Busca por "${deferredSearchTerm}": ${filtered.length}/${processedData.computersWithIndex.length} encontradas`)
+      if (filtered.length > 0) {
+        console.log(`📝 Primeiras 3: ${filtered.slice(0, 3).map(c => c.name).join(', ')}`)
+      } else {
+        // Debug para entender por que não encontrou nada
+        console.log(`🔍 Debug busca "${deferredSearchTerm}" - analisando primeiros 3 computadores:`)
+        processedData.computersWithIndex.slice(0, 3).forEach((comp, idx) => {
+          console.log(`${idx + 1}. ${comp.name}:`)
+          console.log(`   Model: ${comp.model || comp.modelo || 'N/A'}`)
+          console.log(`   SearchableText: "${comp.searchableText.substring(0, 200)}..."`)
+          console.log(`   Contains "${deferredSearchTerm.toLowerCase()}": ${comp.searchableText.includes(deferredSearchTerm.toLowerCase())}`)
+        })
+      }
+    }
+    
+    // // Only log performance in development and when significant
+    // if (process.env.NODE_ENV === 'development' && (hasSearch || hasFilters)) {
+    //   console.log(`🔍 Filtered: ${filtered.length}/${processedData.computersWithIndex.length}`)
+    // }
     
     return filtered
-  }, [processedData, debouncedSearchTerm, filters, navigationState, sortConfig, getSortValue])
+  }, [processedData, deferredSearchTerm, filters, navigationState, sortConfig, getSortValue, advancedFilters])
+
+  // Virtualização otimizada para grandes datasets
+  const virtualizedComputers = useMemo(() => {
+    if (!filteredComputers.length) return { visible: [], total: 0, startIndex: 0, beforeHeight: 0, afterHeight: 0 }
+    
+    const total = filteredComputers.length
+    setTotalCount(total)
+    
+    // Para datasets grandes, renderizar apenas uma janela visível
+    if (total > 100) {
+      const start = Math.max(0, visibleRange.start - VIRTUAL_OVERSCAN)
+      const end = Math.min(total, visibleRange.end + VIRTUAL_OVERSCAN)
+      const beforeHeight = start * VIRTUAL_ROW_HEIGHT
+      const afterHeight = Math.max(0, total - end) * VIRTUAL_ROW_HEIGHT
+      
+      // Removed virtualization debug logs to reduce console spam
+      
+      return {
+        visible: filteredComputers.slice(start, end),
+        total,
+        startIndex: start,
+        beforeHeight,
+        afterHeight
+      }
+    }
+    
+    // Removed "Renderizando tudo" debug log to reduce console spam
+    // For smaller datasets, render everything
+    return { visible: filteredComputers, total, startIndex: 0, beforeHeight: 0, afterHeight: 0 }
+  }, [filteredComputers, visibleRange])
 
   // Cache functions
   const getCachedData = useCallback(() => {
@@ -884,6 +1129,7 @@ const Computers = () => {
           dataSource = 'sql'
           console.log(`📊 SQL retornou ${computerData.length} máquinas (formato estruturado)`)
         } else {
+          console.error('❌ SQL retornou dados em formato inesperado:', sqlResponse.data)
           throw new Error('SQL retornou dados em formato inesperado')
         }
         
@@ -950,6 +1196,25 @@ const Computers = () => {
       setLoading(false)
     }
   }, [getCachedData, setCachedData, processComputersData, memoryCache, processedData, fetchWarrantyData])
+
+  // Handler rápido para desvincular usuário direto da lista
+  const handleUnassign = useCallback(async (computer) => {
+    if (!computer || !computer.name) return
+    const ok = window.confirm(`Deseja realmente desvincular o usuário atual de ${computer.name}?`)
+    if (!ok) return
+    try {
+      setSyncMessage({ type: 'info', text: 'Desvinculando usuário...' })
+      const result = await apiMethods.desvincularUsuario(computer.name)
+      setSyncMessage({ type: 'success', text: `Usuário desvinculado: ${result.data?.usuario_desvinculado || computer.currentUser || ''}` })
+      // Forçar recarregamento de dados
+      setTimeout(() => fetchComputers(false), 800)
+      setTimeout(() => setSyncMessage(null), 4000)
+    } catch (error) {
+      console.error('Erro ao desvincular:', error)
+      setSyncMessage({ type: 'error', text: `Erro ao desvincular: ${error.response?.data?.detail || error.message}` })
+      setTimeout(() => setSyncMessage(null), 6000)
+    }
+  }, [fetchComputers])
 
   // Reprocessar dados quando garantias mudarem
   useEffect(() => {
@@ -1073,6 +1338,11 @@ const Computers = () => {
     }
   }, [])
 
+  // Abre o diálogo de confirmação para ativar/desativar
+  const handleToggleRequest = useCallback((computer, action) => {
+    setConfirmDialog({ open: true, computer, action })
+  }, [])
+
   // Função para verificar se há job em execução
   const checkForRunningJob = useCallback(async () => {
     try {
@@ -1191,23 +1461,54 @@ const Computers = () => {
     }
   }, [fetchComputers, startWarrantyRefresh, testBackendConnectivity])
 
-  // Handler de busca otimizado
+  // Scroll handler para virtualização com throttling
+  const handleTableScroll = useCallback((e) => {
+    if (virtualizedComputers.total <= 100) return // Não virtualizar datasets pequenos
+    
+    const scrollTop = e.target.scrollTop
+    const containerHeight = e.target.clientHeight
+    
+    // Calcular range visível com buffer
+    const start = Math.floor(scrollTop / VIRTUAL_ROW_HEIGHT)
+    const visibleCount = Math.ceil(containerHeight / VIRTUAL_ROW_HEIGHT)
+    const end = Math.min(virtualizedComputers.total, start + visibleCount)
+    
+    // Só atualizar se mudou significativamente (evita re-renders desnecessários)
+    const currentStart = visibleRange.start
+    const currentEnd = visibleRange.end
+    
+    if (Math.abs(start - currentStart) > 5 || Math.abs(end - currentEnd) > 5) {
+      setVisibleRange({ start, end })
+    }
+  }, [virtualizedComputers.total, visibleRange.start, visibleRange.end])
+  
+  // Modern search handler with startTransition
   const handleSearchChange = useCallback((value) => {
+    // Immediate update for input responsiveness
     setSearchTerm(value)
+    
+    // Non-urgent filtering update
+    if (value.trim().length > 2 || value.trim().length === 0) {
+      startTransition(() => {
+        // The filtering will happen via deferredSearchTerm
+        // This marks the filter computation as low priority
+      })
+    }
   }, [])
 
   const resetFilters = useCallback(() => {
-    setFilters({
-      status: 'all',
-      os: 'all',
-      lastLogin: 'all',
-      ou: 'all',
-      warranty: 'all'
+    startTransition(() => {
+      setFilters({
+        status: 'all',
+        os: 'all',
+        lastLogin: 'all',
+        ou: 'all',
+        warranty: 'all'
+      })
+      setSearchTerm('')
+      setSortConfig({ key: 'name', direction: 'asc' })
+      navigationFiltersApplied.current = false
     })
-    setSearchTerm('')
-    setDebouncedSearchTerm('')
-    setSortConfig({ key: 'name', direction: 'asc' })
-    navigationFiltersApplied.current = false
   }, [])
 
   const formatDate = useCallback((dateString) => {
@@ -1437,189 +1738,7 @@ const Computers = () => {
             </div>
           )}
 
-          {/* Barra de progresso da atualização de garantias */}
-          {warrantyRefreshJob && (warrantyRefreshJob.status === 'running' || warrantyRefreshJob.status === 'pending') && (
-            <div className="mt-3 p-4 bg-blue-50 border border-blue-200 rounded-md">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center space-x-2">
-                  <Shield className="h-4 w-4 text-blue-600 animate-pulse" />
-                  <span className="text-sm font-medium text-blue-800">
-                    {warrantyRefreshJob.status === 'pending' ? 'Preparando atualização de garantias...' : 'Atualizando garantias Dell'}
-                  </span>
-                  {localStorage.getItem('warranty_job_id') && (
-                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-green-100 text-green-800">
-                      <div className="w-1 h-1 bg-green-600 rounded-full mr-1"></div>
-                      Persistente
-                    </span>
-                  )}
-                  {warrantyRefreshJob.current_processing && (
-                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-blue-100 text-blue-800 animate-bounce">
-                      <div className="w-1 h-1 bg-blue-600 rounded-full mr-1 animate-pulse"></div>
-                      Processando
-                    </span>
-                  )}
-                  {warrantyRefreshJob.status === 'pending' && (
-                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-yellow-100 text-yellow-800">
-                      <div className="w-1 h-1 bg-yellow-600 rounded-full mr-1 animate-pulse"></div>
-                      Iniciando...
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center space-x-2">
-                  <span className="text-xs text-blue-600 font-mono">
-                    {warrantyRefreshJob.processed || 0}/{warrantyRefreshJob.total || '?'} ({warrantyRefreshJob.progress_percent || 0}%)
-                  </span>
-                  <button
-                    onClick={() => {
-                      setWarrantyRefreshPolling(false)
-                      setWarrantyRefreshJob(null)
-                      
-                      // Limpar localStorage
-                      localStorage.removeItem('warranty_job_id')
-                      localStorage.removeItem('warranty_job_start')
-                      
-                      console.log('🛑 Atualização de garantias cancelada pelo usuário')
-                      console.log('🧹 localStorage limpo')
-                      
-                      setToast({ 
-                        type: 'info', 
-                        text: 'Acompanhamento da atualização cancelado (processo continua no servidor)' 
-                      })
-                      setTimeout(() => setToast(null), 5000)
-                    }}
-                    className="text-xs text-red-600 hover:text-red-800 px-2 py-1 rounded bg-red-50 hover:bg-red-100 transition-colors"
-                    title="Parar acompanhamento (processo continua no servidor)"
-                  >
-                    ✕
-                  </button>
-                </div>
-              </div>
-              
-              {/* Barra de progresso principal */}
-              <div className="w-full bg-blue-200 rounded-full h-3 mb-2">
-                <div 
-                  className="bg-blue-600 h-3 rounded-full transition-all duration-500 ease-in-out" 
-                  style={{ width: `${warrantyRefreshJob.progress_percent || 0}%` }}
-                ></div>
-              </div>
-              
-              {/* Informações detalhadas */}
-              <div className="space-y-1">
-                {/* Lote atual */}
-                {warrantyRefreshJob.status === 'running' && (
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-blue-700">
-                      📦 Lote: {warrantyRefreshJob.current_batch || 0}/{warrantyRefreshJob.total_batches || '?'}
-                    </span>
-                    {warrantyRefreshJob.estimated_time_remaining && warrantyRefreshJob.estimated_time_remaining > 0 && (
-                      <span className="text-blue-600">
-                        ⏱️ ~{Math.floor(warrantyRefreshJob.estimated_time_remaining / 60)}min {warrantyRefreshJob.estimated_time_remaining % 60}s restantes
-                      </span>
-                    )}
-                  </div>
-                )}
-                
-                {/* Status quando pendente */}
-                {warrantyRefreshJob.status === 'pending' && (
-                  <div className="text-xs text-blue-700">
-                    🔄 Preparando lista de computadores para atualização...
-                  </div>
-                )}
-                
-                {/* Item atual sendo processado */}
-                {warrantyRefreshJob.current_processing && (
-                  <div className="text-xs text-blue-700">
-                    ⚙️ Processando: <span className="font-mono">{warrantyRefreshJob.current_processing}</span>
-                  </div>
-                )}
-                
-                {/* Estatísticas de sucesso/erro */}
-                {(warrantyRefreshJob.success_count !== undefined || warrantyRefreshJob.error_count !== undefined) && (
-                  <div className="flex items-center space-x-4 text-xs">
-                    <span className="text-green-700">
-                      ✅ Sucessos: {warrantyRefreshJob.success_count || 0}
-                    </span>
-                    <span className="text-red-700">
-                      ❌ Erros: {warrantyRefreshJob.error_count || 0}
-                    </span>
-                  </div>
-                )}
-                
-                {/* Performance do batch */}
-                {warrantyRefreshJob.last_batch_duration && (
-                  <div className="text-xs text-blue-700">
-                    ⏱️ Último lote: {warrantyRefreshJob.last_batch_duration.toFixed(1)}s
-                  </div>
-                )}
-                
-                {/* Informações do lote atual */}
-                {warrantyRefreshJob.current_batch_items && warrantyRefreshJob.current_batch_items.length > 0 && (
-                  <div className="mt-2 p-2 bg-white bg-opacity-50 rounded text-xs">
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="font-medium text-blue-800">Lote atual ({warrantyRefreshJob.current_batch_items.length} itens):</div>
-                      {warrantyRefreshJob.last_batch_duration && (
-                        <div className="text-blue-600 text-xs">
-                          {warrantyRefreshJob.last_batch_duration.toFixed(1)}s
-                        </div>
-                      )}
-                    </div>
-                    <div className="space-y-1 max-h-24 overflow-y-auto">
-                      {warrantyRefreshJob.current_batch_items.map((item, index) => (
-                        <div key={index} className="flex items-center justify-between text-xs">
-                          <div className="flex items-center space-x-2 flex-1 min-w-0">
-                            <span className="font-mono text-blue-700 text-xs truncate">
-                              {item.service_tag}
-                            </span>
-                            {item.computer_name && item.computer_name !== 'Unknown' && (
-                              <span className="text-gray-600 text-xs truncate">
-                                ({item.computer_name})
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center space-x-1 flex-shrink-0">
-                            {item.status === 'success' && (
-                              <>
-                                <span className="text-green-600">✅</span>
-                                <span className={`text-xs px-1 rounded ${
-                                  item.warranty_status === 'Active' ? 'bg-green-100 text-green-700' :
-                                  item.warranty_status === 'Expired' ? 'bg-red-100 text-red-700' :
-                                  'bg-gray-100 text-gray-700'
-                                }`}>
-                                  {item.warranty_status}
-                                </span>
-                                {item.end_date && (
-                                  <span className="text-xs text-gray-500">
-                                    {item.end_date}
-                                  </span>
-                                )}
-                              </>
-                            )}
-                            {item.status !== 'success' && (
-                              <>
-                                <span className="text-red-600">❌</span>
-                                <span className="text-red-600 text-xs truncate max-w-20" title={item.error}>
-                                  {item.error}
-                                </span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-              
-              <div className="text-xs text-blue-600 mt-2 border-t border-blue-200 pt-2">
-                💡 Processamento em background (10 itens por lote) - Outras ações permanecem disponíveis
-                {warrantyRefreshJob.job_id && (
-                  <div className="text-xs text-gray-500 mt-1">
-                    Job ID: {warrantyRefreshJob.job_id} | Status: {warrantyRefreshJob.status}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+          {/* Garantia: mostrador removido por solicitação de UX */}
 
           {/* Ordenação atual */}
           {sortConfig.key !== 'name' || sortConfig.direction !== 'asc' ? (
@@ -1761,12 +1880,12 @@ const Computers = () => {
           {isSearching && (
             <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
           )}
-          {(searchTerm || debouncedSearchTerm) && !isSearching && (
+          {(searchTerm || deferredSearchTerm) && !isSearching && (
             <span className="text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded">
               {filteredComputers.length}
             </span>
           )}
-          {!searchTerm && !debouncedSearchTerm && Object.values(filters).some(f => f !== 'all') && (
+          {!searchTerm && !deferredSearchTerm && Object.values(filters).some(f => f !== 'all') && (
             <span className="text-xs text-orange-600 bg-orange-100 px-2 py-1 rounded">
               Filtrado
             </span>
@@ -1831,6 +1950,20 @@ const Computers = () => {
                     <option key={ou.code} value={ou.code}>
                       {ou.name} ({ou.count})
                     </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Modelo</label>
+                <select
+                  value={filters.model}
+                  onChange={(e) => setFilters(prev => ({ ...prev, model: e.target.value }))}
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
+                >
+                  <option value="all">Todos os modelos</option>
+                  {(processedData?.uniqueModelList || []).map(m => (
+                    <option key={m} value={m}>{m}</option>
                   ))}
                 </select>
               </div>
@@ -1975,7 +2108,7 @@ const Computers = () => {
                   </span>
                 )}
                 <span>
-                  Mostrando {filteredComputers.length} de {computers.length} máquinas
+                  Mostrando {totalCount} de {computers.length} máquinas
                 </span>
               </div>
             </div>
@@ -2048,8 +2181,8 @@ const Computers = () => {
           <div className="text-sm text-gray-600">Garantia Expirada</div>
         </div>
         <div className="bg-white p-4 rounded-lg shadow text-center transition-all hover:shadow-md">
-          <div className="text-2xl font-bold text-orange-600">{filteredComputers.length}</div>
-          <div className="text-sm text-gray-600">Filtrados</div>
+          <div className="text-2xl font-bold text-orange-600">{totalCount}</div>
+          <div className="text-sm text-gray-600">{totalCount > 100 ? `${virtualizedComputers.visible.length} visíveis de ${totalCount}` : 'Total'}</div>
         </div>
       </div>
 
@@ -2060,10 +2193,21 @@ const Computers = () => {
           <nav className="flex flex-col space-y-2">
             <button
               className={`text-left px-3 py-2 rounded ${sideTab === 'all' ? 'bg-blue-50 border-l-4 border-blue-600' : 'hover:bg-gray-50'}`}
-              onClick={() => { 
-                setSideTab('all'); 
-                setAdvancedFilters(prev => ({ ...prev, inventory: 'all' }));
-                fetchComputers(false, null); // Buscar todas as máquinas
+              onClick={() => {
+                try {
+                  setSideTab('all')
+                  setAdvancedFilters(prev => ({ ...prev, inventory: 'all' }))
+                  // fetchComputers handles its own errors, but guard promise to avoid unhandled rejections
+                  fetchComputers(false, null).catch((e) => {
+                    console.error('Erro ao buscar máquinas (Todas):', e)
+                    setToast({ type: 'error', text: 'Erro ao carregar máquinas. Veja o console para detalhes.' })
+                    setTimeout(() => setToast(null), 6000)
+                  })
+                } catch (e) {
+                  console.error('Erro sincrono no clique (Todas):', e)
+                  setToast({ type: 'error', text: 'Erro ao processar a ação. Veja o console.' })
+                  setTimeout(() => setToast(null), 6000)
+                }
               }}
             >
               <div className="text-sm font-medium">Todas</div>
@@ -2071,15 +2215,14 @@ const Computers = () => {
             </button>
 
             <button
-              className={`text-left px-3 py-2 rounded ${sideTab === 'inventory' ? 'bg-blue-50 border-l-4 border-blue-600' : 'hover:bg-gray-50'}`}
-              onClick={() => { 
-                setSideTab('inventory'); 
-                setAdvancedFilters(prev => ({ ...prev, inventory: 'spare' }));
-                fetchComputers(false, 'spare'); // Buscar apenas máquinas Spare
-              }}
+              className={`text-left px-3 py-2 rounded opacity-50 cursor-not-allowed ${sideTab === 'inventory' ? 'bg-blue-50 border-l-4 border-blue-600' : ''}`}
+              disabled
+              title="WIP: Inventário (Spare) — Em desenvolvimento"
             >
-              <div className="text-sm font-medium">Inventário</div>
-              <div className="text-xs text-gray-500">Apenas Máquinas Spare</div>
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-medium">Inventário <span className="ml-2 inline-block bg-yellow-100 text-yellow-800 text-xs px-2 py-0.5 rounded">WIP</span></div>
+              </div>
+              <div className="text-xs text-gray-500">Apenas Máquinas Spare (WIP)</div>
             </button>
           </nav>
         </aside>
@@ -2095,12 +2238,13 @@ const Computers = () => {
             </div>
           )}
 
-          <div className="overflow-x-auto max-h-[70vh] relative" style={{ scrollbarWidth: 'thin' }}>
+          <div className="overflow-x-auto max-h-[70vh] relative" style={{ scrollbarWidth: 'thin' }} onScroll={handleTableScroll}>
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50 sticky top-0 z-10">
                 <tr>
                   <SortableHeader sortKey="status" className="w-20">Status</SortableHeader>
                   <SortableHeader sortKey="name" className="min-w-48">Máquina</SortableHeader>
+                  <SortableHeader sortKey="model" className="min-w-36">Modelo</SortableHeader>
                   <SortableHeader sortKey="ou" className="w-32">OU</SortableHeader>
                   <SortableHeader sortKey="os" className="w-40">Sistema Op.</SortableHeader>
                   <SortableHeader sortKey="warranty" className="w-36">Garantia Dell</SortableHeader>
@@ -2111,138 +2255,52 @@ const Computers = () => {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {filteredComputers.map((computer) => {
-                  const WarrantyIcon = computer.warrantyStatus.icon
-                  return (
-                    <tr 
-                      key={computer.name} 
-                      className="hover:bg-blue-50 transition-colors cursor-pointer group"
-                      onClick={() => window.location.href = `/computers/${computer.name}`}
-                      title={`Clique para ver detalhes de ${computer.name}`}
-                    >
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        <div className="flex items-center">
-                          {computer.isEnabled ? (
-                            <div className="flex items-center text-green-600">
-                              <CheckCircle className="h-4 w-4 mr-1" />
-                              <span className="text-xs font-medium">Ativa</span>
-                            </div>
-                          ) : (
-                            <div className="flex items-center text-red-600">
-                              <XCircle className="h-4 w-4 mr-1" />
-                              <span className="text-xs font-medium">Inativa</span>
-                            </div>
-                          )}
-                        </div>
-                      </td>
-
-                      <td className="px-4 py-3">
-                        <div className="flex items-center">
-                          {computer.ou.code === 'CLOUD' || (computer.os && computer.os.toLowerCase().includes('server')) ? (
-                            <Server className="h-4 w-4 text-gray-400 mr-2 flex-shrink-0" />
-                          ) : (
-                            <Monitor className="h-4 w-4 text-gray-400 mr-2 flex-shrink-0" />
-                          )}
-                          <div className="min-w-0">
-                            <div className="text-sm font-medium text-gray-900 truncate">{computer.name}</div>
-                            {computer.description && (<div className="text-xs text-gray-500 truncate">{computer.description}</div>)}
-                            {computer.dnsHostName && computer.dnsHostName !== computer.name && (<div className="text-xs text-blue-600 truncate">DNS: {computer.dnsHostName}</div>)}
-                          </div>
-                        </div>
-                      </td>
-
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        <div className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${computer.ou.bgColor} ${computer.ou.color} ${
-                          navigationState?.filterOU && computer.ou.code === filters.ou ? 'ring-2 ring-blue-300' : ''
-                        }`}>
-                          <Building2 className="h-3 w-3 mr-1 flex-shrink-0" />
-                          <span className="truncate">{computer.ou.name}</span>
-                        </div>
-                        <div className="text-xs text-gray-500 mt-1 truncate">{computer.ou.code}</div>
-                      </td>
-
-                      <td className="px-4 py-3">
-                        <div className={`text-sm ${navigationState?.filterOS && computer.os === filters.os ? 'text-blue-700 font-medium bg-blue-50 px-2 py-1 rounded' : 'text-gray-900'} truncate`}>{computer.os}</div>
-                        {computer.osVersion && computer.osVersion !== 'N/A' && (<div className="text-xs text-gray-500 truncate">{computer.osVersion}</div>)}
-                      </td>
-
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        <div className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${computer.warrantyStatus.bgColor} ${computer.warrantyStatus.color} ${navigationState?.filterWarranty && computer.warrantyStatus.status === filters.warranty ? 'ring-2 ring-blue-300' : ''}`}>
-                          <WarrantyIcon className="h-3 w-3 mr-1 flex-shrink-0" />
-                          <span className="truncate">{computer.warrantyStatus.text}</span>
-                        </div>
-                        {computer.warranty && computer.warranty.warranty_end_date && (<div className="text-xs text-gray-500 mt-1 truncate">Expira: {formatDate(computer.warranty.warranty_end_date)}</div>)}
-                      </td>
-
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        <div className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${computer.loginStatus.bgColor} ${computer.loginStatus.color} ${navigationState?.filterLastLogin && computer.loginStatus.status === filters.lastLogin ? 'ring-2 ring-blue-300' : ''}`}>
-                          <span className="truncate">{computer.loginStatus.text}</span>
-                        </div>
-                        {computer.lastLogon && (<div className="text-xs text-gray-500 mt-1 truncate">{formatDate(computer.lastLogon)}</div>)}
-                      </td>
-
-                      <td className="px-4 py-3">
-                        <div className="text-sm text-gray-900 truncate">
-                          {computer.currentUser ? (
-                            <>
-                              <div className="font-medium truncate">{computer.currentUser}</div>
-                              {computer.previousUser && (
-                                <div className="text-xs text-gray-500 truncate">
-                                  Anterior: {computer.previousUser}
-                                </div>
-                              )}
-                            </>
-                          ) : (
-                            <span className="text-gray-400 italic text-xs">Usuário não identificado</span>
-                          )}
-                        </div>
-                      </td>
-
-                      <td className="px-4 py-3 whitespace-nowrap text-sm font-medium sticky right-32 bg-white group-hover:bg-blue-50">
-                        <div className="flex items-center space-x-2">
-                          <Link to={`/computers/${computer.name}`} className="inline-flex items-center text-blue-600 hover:text-blue-900 transition-colors text-xs" onClick={(e) => e.stopPropagation()}>
-                            <Eye className="h-3 w-3 mr-1" /> Ver
-                          </Link>
-                          <button onClick={(e) => { e.stopPropagation(); setConfirmDialog({ open: true, computer, action: computer.isEnabled ? 'disable' : 'enable' }) }} disabled={toggleStatusLoading.has(computer.name)} className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-medium transition-colors ${computer.isEnabled ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-green-600 text-white hover:bg-green-700'}`}>
-                            {toggleStatusLoading.has(computer.name) ? (<Loader2 className="h-3 w-3 mr-1 animate-spin" />) : (<Power className="h-3 w-3 mr-1" />)}
-                            <span>{computer.isEnabled ? 'Desativar' : 'Ativar'}</span>
-                          </button>
-                        </div>
-                      </td>
-
-                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500 sticky right-0 bg-white group-hover:bg-blue-50">
-                        <div className="flex items-center">
-                          <Calendar className="h-3 w-3 mr-1 flex-shrink-0" />
-                          <span className="truncate">{formatDate(computer.created)}</span>
-                        </div>
-                        {statusMessages.get(computer.name) && (<div className="mt-1 text-xs"><span className={`${statusMessages.get(computer.name).type === 'success' ? 'text-green-600' : 'text-red-600'}`}>{statusMessages.get(computer.name).text}</span></div>)}
-                      </td>
-                    </tr>
-                  )
-                })}
+                {/* Spacer superior para virtualização */}
+                {virtualizedComputers.beforeHeight > 0 && (
+                  <tr style={{ height: `${virtualizedComputers.beforeHeight}px` }}>
+                    <td colSpan="10" className="p-0"></td>
+                  </tr>
+                )}
+                
+                {virtualizedComputers.visible.map((computer, mapIndex) => (
+                  <ComputerTableRow 
+                    key={computer.id ? `${computer.id}-${computer.index ?? mapIndex}` : `${computer.name}-${computer.index ?? mapIndex}`}
+                    computer={computer}
+                    mapIndex={mapIndex + (virtualizedComputers.startIndex || 0)}
+                    onUnassign={handleUnassign}
+                    onToggle={handleToggleRequest}
+                  />
+                ))}
+                
+                {/* Spacer inferior para virtualização */}
+                {virtualizedComputers.afterHeight > 0 && (
+                  <tr style={{ height: `${virtualizedComputers.afterHeight}px` }}>
+                    <td colSpan="10" className="p-0"></td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
 
-          {filteredComputers.length === 0 && !loading && !isSearching && (
+          {totalCount === 0 && !loading && !isSearching && (
             <div className="text-center py-12">
               <Monitor className="mx-auto h-12 w-12 text-gray-400" />
               <h3 className="mt-2 text-sm font-medium text-gray-900">Nenhuma máquina encontrada</h3>
-              <p className="mt-1 text-sm text-gray-500">{searchTerm || debouncedSearchTerm || Object.values(filters).some(f => f !== 'all') ? 'Tente ajustar os filtros de pesquisa.' : 'Não há máquinas registradas no Active Directory.'}</p>
-              {(searchTerm || debouncedSearchTerm || Object.values(filters).some(f => f !== 'all')) && (
+              <p className="mt-1 text-sm text-gray-500">{searchTerm || deferredSearchTerm || Object.values(filters).some(f => f !== 'all') ? 'Tente ajustar os filtros de pesquisa.' : 'Não há máquinas registradas no Active Directory.'}</p>
+              {(searchTerm || deferredSearchTerm || Object.values(filters).some(f => f !== 'all')) && (
                 <button onClick={resetFilters} className="mt-2 text-blue-600 hover:text-blue-500 text-sm transition-colors">Limpar todos os filtros</button>
               )}
             </div>
           )}
 
           {/* Footer da tabela com informações de ordenação */}
-          {filteredComputers.length > 0 && (
+          {totalCount > 0 && (
             <div className="px-4 py-3 bg-gray-50 border-t border-gray-200">
               <div className="flex items-center justify-between text-sm text-gray-600">
                 <div className="flex items-center space-x-4">
-                  <span>{filteredComputers.length} máquina{filteredComputers.length !== 1 ? 's' : ''} exibida{filteredComputers.length !== 1 ? 's' : ''}</span>
-                  {filteredComputers.length !== computers.length && (
-                    <span className="text-orange-600">({computers.length - filteredComputers.length} filtrada{computers.length - filteredComputers.length !== 1 ? 's' : ''})</span>
+                  <span>{totalCount} máquina{totalCount !== 1 ? 's' : ''} exibida{totalCount !== 1 ? 's' : ''}</span>
+                  {totalCount !== computers.length && (
+                    <span className="text-orange-600">({computers.length - totalCount} filtrada{computers.length - totalCount !== 1 ? 's' : ''})</span>
                   )}
                 </div>
                 <div className="flex items-center space-x-2">

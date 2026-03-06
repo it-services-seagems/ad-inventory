@@ -3,9 +3,11 @@ from fastapi.responses import JSONResponse
 from datetime import datetime
 import time
 import re
+import logging
 from ..managers import sql_manager, ad_manager, ad_computer_manager
 from ..connections import require_dhcp_manager
 
+logger = logging.getLogger(__name__)
 computers_router = APIRouter()
 
 
@@ -20,6 +22,7 @@ def list_computers(source: str = 'sql', inventory_filter: str = None):
             results = ad_manager.get_computers()
             return JSONResponse(content=results)
     except Exception as e:
+        logger.exception("Error in list_computers")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -202,7 +205,14 @@ def get_computer_warranty(computer_name: str, force: bool = False):
         if dell_api is None:
             raise HTTPException(status_code=503, detail='Dell API client not available')
 
-        res = dell_api.get_warranty_info(service_tag)
+        # Import dell_warranty_manager
+        from ..managers.dell import dell_warranty_manager
+        
+        # Use force_api=True if user requested force, otherwise try cache first
+        if force:
+            res = dell_warranty_manager.get_warranty_info_force_api(service_tag)
+        else:
+            res = dell_warranty_manager.get_warranty_info_cached_first(service_tag)
         if res is None or 'error' in res:
             code = res.get('code') if isinstance(res, dict) else None
             if code == 'SERVICE_TAG_NOT_FOUND':
@@ -271,7 +281,7 @@ def get_computer_warranty(computer_name: str, force: bool = False):
 def refresh_computer_warranty(computer_name: str):
     """Refresh warranty information for a specific computer"""
     try:
-        from ..managers.dell import dell_api
+        from ..managers.dell import dell_api, dell_warranty_manager
         
         # Get computer details to find service tag
         # Avoid selecting a potentially missing 'service_tag' column from the computers table
@@ -288,11 +298,11 @@ def refresh_computer_warranty(computer_name: str):
         if not service_tag:
             raise HTTPException(status_code=404, detail=f'Service tag not found for computer {computer_name}')
         
-        # Get fresh warranty info from Dell API
+        # Get fresh warranty info from Dell API (force=True para refresh)
         if dell_api is None:
             raise HTTPException(status_code=503, detail='Dell API client not available')
             
-        res = dell_api.get_warranty_info(service_tag)
+        res = dell_warranty_manager.get_warranty_info_force_api(service_tag)
         if res is None or 'error' in res:
             # map some error codes to HTTP statuses
             code = res.get('code') if isinstance(res, dict) else None

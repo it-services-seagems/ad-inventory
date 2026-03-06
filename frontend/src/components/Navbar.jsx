@@ -8,7 +8,6 @@ const Navbar = () => {
   const location = useLocation()
 
   const navItems = [
-    { path: '/dashboard', name: 'Dashboard', icon: BarChart3 },
     { path: '/computers', name: 'Máquinas', icon: Computer },
     { path: '/mobiles', name: 'Celulares', icon: Smartphone }
   ]

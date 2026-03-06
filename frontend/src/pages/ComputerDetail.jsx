@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Monitor, Calendar, Shield, RefreshCw, AlertTriangle, ShieldOff, ShieldAlert, Network, Server, Search, MapPin, CheckCircle } from 'lucide-react'
 import api, { apiMethods } from '../services/api'
@@ -41,13 +41,23 @@ const ComputerDetail = () => {
   })
   const [pageReloading, setPageReloading] = useState(false)
 
+  // Evita efeitos duplicados em modo de desenvolvimento com React StrictMode
+  const lastFetchedForRef = useRef(null)
+
   useEffect(() => {
-    fetchComputerData()
-    
+    // Em dev/StrictMode o useEffect pode ser disparado duas vezes ao montar.
+    // Ignorar chamadas duplicadas para o mesmo `computerName`.
+    if (lastFetchedForRef.current === computerName) {
+      // ainda executar o bloco de toasts abaixo, mas não refetch
+    } else {
+      lastFetchedForRef.current = computerName
+      fetchComputerData()
+    }
+
     // Verificar se há mensagem de toast salva após reload
     const savedMessage = sessionStorage.getItem('toast_message')
     const savedType = sessionStorage.getItem('toast_type')
-    
+
     if (savedMessage) {
       // Pequeno delay para garantir que a página carregou completamente
       setTimeout(() => {
@@ -78,8 +88,9 @@ const ComputerDetail = () => {
       
       if (computerData) {
         // Normalize common AD/DB column name differences so the UI gets `os` and `osVersion`
+        let normalized = null
         try {
-          const normalized = { ...computerData }
+          normalized = { ...computerData }
           // OS fallbacks
           if (!normalized.os) {
             normalized.os = normalized.operating_system || normalized.operatingSystem || (normalized.operating_system_id ? `OS id: ${normalized.operating_system_id}` : null) || 'N/A'
@@ -119,19 +130,16 @@ const ComputerDetail = () => {
         fetchDHCPInfo()
         
         // Só buscar usuário atual via PowerShell se não houver dados no SQL
-        if (!normalized.currentUser || normalized.currentUser.trim() === '') {
+        if (!normalized || !normalized.currentUser || normalized.currentUser.trim() === '') {
           fetchCurrentUser()
         }
         
-        // Buscar garantia automaticamente
+        // Buscar garantia Dell: usar mesma lógica do DHCP — chamar fetchWarrantyInfo(true)
+        // para forçar a atualização e exibir o spinner enquanto a operação ocorre.
         try {
-          fetchWarrantyInfo(false) // Cache do SQL primeiro
-          // Atualizar garantia Dell em background
-          setTimeout(() => {
-            fetchWarrantyInfo(true) // Force refresh da garantia
-          }, 2000)
+          await fetchWarrantyInfo(true)
         } catch (err) {
-          console.warn('Erro ao iniciar fetchWarrantyInfo automático:', err)
+          console.warn('Erro ao buscar garantia ao abrir detalhe:', err)
         }
       }
     } catch (error) {
@@ -200,11 +208,13 @@ const ComputerDetail = () => {
     return computerName // Retorna o nome original se não conseguir extrair
   }
 
-  const fetchWarrantyInfo = async (force = false) => {
+  const fetchWarrantyInfo = async (force = false, silent = false) => {
     // Mantemos a função para consulta manual via botões na UI
     try {
-      setWarrantyLoading(true)
-  const url = `/computers/${computerName}/warranty${force ? '?force=true' : ''}`
+      console.log('🔄 fetchWarrantyInfo start', { force, silent })
+      if (!silent) setWarrantyLoading(true)
+      const url = `/computers/${computerName}/warranty${force ? '?force=true' : ''}`
+      
   const response = await api.get(url)
       // Normalizar vários formatos que o backend pode retornar
       const raw = response.data || {}
@@ -243,14 +253,21 @@ const ComputerDetail = () => {
         }
         normalized.entitlements = Array.isArray(ent) ? ent : []
         setWarranty(normalized)
+        return normalized
       } else {
-        setWarranty({ error: 'Informações de garantia não encontradas' })
+        const errObj = { error: 'Informações de garantia não encontradas' }
+        // only set error state when not silent; otherwise return the error object
+        if (!silent) setWarranty(errObj)
+        return errObj
       }
     } catch (error) {
       console.error('Erro ao carregar informações de garantia:', error)
-      setWarranty({ error: 'Informações de garantia não encontradas' })
+      const errObj = { error: 'Informações de garantia não encontradas' }
+      if (!silent) setWarranty(errObj)
+      return errObj
     } finally {
-      setWarrantyLoading(false)
+      if (!silent) setWarrantyLoading(false)
+      console.log('🔄 fetchWarrantyInfo end', { warrantyLoading })
     }
   }
 
@@ -298,8 +315,15 @@ const ComputerDetail = () => {
             throw new Error('Resposta DHCP inválida')
           }
         } catch (error) {
-          console.log('❌ Erro na busca por navio:', error.response?.status, error.response?.data || error.message)
-          // Continue para a segunda tentativa independente do tipo de erro (404, 500, etc.)
+          // Se o endpoint específico do navio não existir, isso é esperado para alguns navios
+          // (por exemplo o backend pode não implementar filtros por navio). Tratar 404
+          // como informação e tentar a busca geral sem poluir o console com erros.
+          if (error.response && error.response.status === 404) {
+            console.info('ℹ️ DHCP filters endpoint não implementado para', shipPrefix, '- usando /dhcp/search')
+          } else {
+            console.error('❌ Erro na busca por navio:', error.response?.status, error.response?.data || error.message)
+          }
+          // Continue para a segunda tentativa independente do tipo de erro (500, etc.)
           
           // Segunda tentativa: busca geral em todos os servidores
           try {
@@ -492,7 +516,6 @@ const ComputerDetail = () => {
       // Criar um objeto funcionário simplificado para modo manual
       const manualUser = {
         ...selectedUser,
-        matricula: 'MANUAL',
         email_corporativo: 'manual@entrada.local'
       }
       
@@ -816,6 +839,8 @@ const ComputerDetail = () => {
     return { color: 'bg-yellow-100 text-yellow-800', text: 'Não encontrado no DHCP', icon: Search }
   }
 
+  
+
 
 
   const getWarrantyIcon = (warrantyStatus) => {
@@ -919,8 +944,9 @@ const ComputerDetail = () => {
         </div>
       </div>
 
-      {/* Status Cards - ATUALIZADO COM NOVO CARD */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
+      
+          {/* Status Cards - ATUALIZADO COM NOVO CARD */}
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
         <div className="bg-white p-6 rounded-lg shadow hover:shadow-md transition-shadow">
           <div className="flex items-center">
             <Monitor className="h-8 w-8 text-blue-600" />
@@ -987,10 +1013,10 @@ const ComputerDetail = () => {
             </div>
           </div>
         </div>
-      </div>
+          </div>
 
-      {/* Informações Detalhadas */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Informações Detalhadas */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Informações do Sistema */}
         <div className="bg-white p-6 rounded-lg shadow hover:shadow-md transition-shadow">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Informações do Sistema</h3>
@@ -1039,6 +1065,35 @@ const ComputerDetail = () => {
             <div>
               <dt className="text-sm font-medium text-gray-500">Inventário</dt>
               <dd className="text-sm text-gray-900">{computer.inventoryStatus || 'N/A'}</dd>
+            </div>
+
+            <div>
+              <dt className="text-sm font-medium text-gray-500">Usuário Atual</dt>
+              <dd className="text-sm text-gray-900">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium">{computer.currentUser || currentUserLive?.usuario_atual || 'Nenhum'}</div>
+                    <div className="text-xs text-gray-500">Usuário anterior: {computer.previousUser || 'N/A'}</div>
+                  </div>
+                  <div>
+                    {computer.currentUser || currentUserLive?.usuario_atual ? (
+                      <button
+                        onClick={handleUnassignUser}
+                        className="px-2 py-1 text-sm font-medium text-white bg-red-600 rounded hover:bg-red-700"
+                      >
+                        Desvincular
+                      </button>
+                    ) : (
+                      <button
+                        onClick={openUserAssignModal}
+                        className="px-3 py-1 text-sm font-medium text-white bg-blue-600 rounded hover:bg-blue-700"
+                      >
+                        Vincular
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </dd>
             </div>
 
             {/* Mostrar Base apenas se for SHQ */}
@@ -1090,7 +1145,7 @@ const ComputerDetail = () => {
             </div>
           </dl>
         </div>
-      </div>
+          </div>
 
       {/* Informações de Garantia Dell */}
       <div className="bg-white p-6 rounded-lg shadow hover:shadow-md transition-shadow">
@@ -1098,7 +1153,7 @@ const ComputerDetail = () => {
           <h3 className="text-lg font-semibold text-gray-900">Informações de Garantia Dell</h3>
           <div className="flex items-center space-x-2">
             <button
-              onClick={fetchWarrantyInfo}
+              onClick={() => fetchWarrantyInfo(false)}
               disabled={warrantyLoading}
               className="flex items-center space-x-2 text-blue-600 hover:text-blue-800 disabled:opacity-50 transition-colors"
               title="Consultar garantia (apenas consulta)"
@@ -1106,45 +1161,7 @@ const ComputerDetail = () => {
               <RefreshCw className={`h-4 w-4 ${warrantyLoading ? 'animate-spin' : ''}`} />
               <span>Atualizar</span>
             </button>
-            <button
-              onClick={async () => {
-                try {
-                  setWarrantyLoading(true)
-                  const resp = await api.post(`/computers/${encodeURIComponent(computerName)}/warranty/refresh`)
-                  if (resp.data && resp.data.warranty_data) {
-                    // Atualizar estado local com os dados retornados pelo backend
-                    // normalize entitlements that might be stringified JSON
-                    let ent = resp.data.warranty_data.entitlements
-                    try {
-                      if (typeof ent === 'string') ent = JSON.parse(ent)
-                    } catch (e) {
-                      ent = []
-                    }
-
-                    const w = {
-                      serviceTag: resp.data.warranty_data.service_tag,
-                      productLineDescription: resp.data.warranty_data.product_description || resp.data.warranty_data.product_description || '',
-                      systemDescription: resp.data.warranty_data.product_description || '',
-                      warrantyEndDate: resp.data.warranty_data.warranty_end_date || resp.data.warranty_data.expiration_date_formatted || null,
-                      warrantyStatus: resp.data.warranty_data.warranty_status === 'Active' ? 'Active' : 'Expired',
-                      entitlements: Array.isArray(ent) ? ent : [],
-                      dataSource: 'manual_refresh'
-                    }
-                    setWarranty(w)
-                  }
-                } catch (err) {
-                  console.error('Erro ao forçar refresh de garantia:', err)
-                } finally {
-                  setWarrantyLoading(false)
-                }
-              }}
-              disabled={warrantyLoading}
-              className="flex items-center space-x-2 text-green-600 hover:text-green-800 disabled:opacity-50 transition-colors"
-              title="Sync + (forçar atualização e gravar no banco)"
-            >
-              <RefreshCw className={`h-4 w-4 ${warrantyLoading ? 'animate-spin' : ''}`} />
-              <span>Sync +</span>
-            </button>
+            {/* Sync + removed — warranty is fetched automatically when opening the page */}
           </div>
         </div>
         
@@ -1204,6 +1221,12 @@ const ComputerDetail = () => {
                         <tr key={index} className="hover:bg-gray-50">
                           <td className="px-6 py-4 text-sm text-gray-900">
                             {entitlement.serviceLevelDescription}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-500">
+                            {entitlement.entitlementType || entitlement.serviceLevelCode || entitlement.itemNumber || 'N/A'}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-500">
+                            {entitlement.startDate ? formatEntitlementDate(entitlement.startDate) : 'N/A'}
                           </td>
                           <td className="px-6 py-4 text-sm text-gray-500">
                             {entitlement.endDate ? formatEntitlementDate(entitlement.endDate) : 'N/A'}
@@ -1432,6 +1455,7 @@ const ComputerDetail = () => {
       </div>
 
       {/* Modal de Atribuição de Usuário */}
+      
       {showUserAssignModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
           <div className="bg-white rounded-lg shadow-lg w-full max-w-lg mx-4">
@@ -1495,7 +1519,7 @@ const ComputerDetail = () => {
                         type="text"
                         value={userSearchTerm}
                         onChange={(e) => setUserSearchTerm(e.target.value)}
-                        placeholder="Digite nome ou matrícula..."
+                        placeholder="Digite nome..."
                         className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
                       <button
@@ -1521,19 +1545,19 @@ const ComputerDetail = () => {
                       const email = funcionario.email_corporativo || funcionario.email
                       const emailValido = isEmailValido(email)
                       const podeVincular = !funcionario.demitido && emailValido
+                      const userId = funcionario.email_corporativo || funcionario.email || funcionario.nome
                       
                       return (
                         <div
-                          key={funcionario.matricula}
+                          key={userId}
                           onClick={() => {
                             if (podeVincular) {
                               setSelectedUser({
-                                id: funcionario.matricula,
+                                id: userId,
                                 name: funcionario.nome,
                                 email: email,
                                 email_corporativo: funcionario.email_corporativo,
                                 source: 'corpore',
-                                matricula: funcionario.matricula,
                                 cargo: funcionario.cargo,
                                 unidade: funcionario.unidade
                               })
@@ -1542,7 +1566,7 @@ const ComputerDetail = () => {
                           className={`p-3 border rounded-md transition-colors ${
                             !podeVincular
                               ? 'border-red-200 bg-red-50 opacity-60 cursor-not-allowed'
-                              : selectedUser?.matricula === funcionario.matricula
+                              : selectedUser?.id === userId
                                 ? 'border-blue-500 bg-blue-50 cursor-pointer'
                                 : 'border-gray-200 hover:border-gray-300 cursor-pointer'
                           }`}
@@ -1559,7 +1583,7 @@ const ComputerDetail = () => {
                                 )}
                               </div>
                               <div className="text-sm text-gray-600">
-                                Matrícula: {funcionario.matricula} | {funcionario.cargo}
+                                {funcionario.cargo}
                               </div>
                               <div className={`text-sm ${!emailValido ? 'text-red-600' : 'text-gray-600'}`}>
                                 {email || 'Sem email corporativo'}
@@ -1599,19 +1623,7 @@ const ComputerDetail = () => {
                       required
                     />
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Matrícula *
-                    </label>
-                    <input
-                      type="text"
-                      value={selectedUser?.matricula || ''}
-                      onChange={(e) => setSelectedUser(prev => ({ ...prev, matricula: e.target.value }))}
-                      placeholder="Digite a matrícula do funcionário"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      required
-                    />
-                  </div>
+                  {/* matrícula field removed per request */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       Email Corporativo *

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
-from ..managers.dell import dell_api
+from ..managers.dell import dell_api, dell_warranty_manager
 
 warranty_router = APIRouter()
 
@@ -10,7 +10,7 @@ def get_warranty(service_tag: str):
     try:
         if dell_api is None:
             raise HTTPException(status_code=503, detail='Dell API client not available')
-        res = dell_api.get_warranty_info(service_tag)
+        res = dell_warranty_manager.get_warranty_info_force_api(service_tag)
         if res is None or 'error' in res:
             # map some error codes to HTTP statuses
             code = res.get('code') if isinstance(res, dict) else None

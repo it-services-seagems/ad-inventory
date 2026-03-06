@@ -122,11 +122,19 @@ def start_warranty_refresh(background_tasks: BackgroundTasks, mode: Optional[str
                 _jobs[jid]['started_at'] = time.time()
 
             # Use the new Dell API manager instead of legacy script
-            from ..managers.dell import dell_api
+            from ..managers.dell import dell_api, dell_warranty_manager
             from ..managers.sql import sql_manager
             import logging
-            
+
+            # Silence module-level warranty job logs to avoid console spam in production
             logger = logging.getLogger(__name__)
+            try:
+                logger.addHandler(logging.NullHandler())
+                logger.propagate = False
+            except Exception:
+                # Fallback: if NullHandler not available for some envs, set level to WARNING
+                logger.setLevel(logging.WARNING)
+
             logger.info(f"Starting warranty refresh job {jid}")
 
             # Ensure Dell API client is available before any network calls
@@ -183,8 +191,8 @@ def start_warranty_refresh(background_tasks: BackgroundTasks, mode: Optional[str
                         computer_id = computer['id'] if computer else None
                         computer_name = computer['name'] if computer else 'Unknown'
                         
-                        # Get warranty info using new Dell API
-                        result = dell_api.get_warranty_info(service_tag)
+                        # Get warranty info using Dell API (cache first for background jobs)
+                        result = dell_warranty_manager.get_warranty_info_cached_first(service_tag)
                         
                         if result and 'error' not in result:
                             # Convert result to database format and save
