@@ -626,10 +626,18 @@ const Computers = () => {
             sortValue: 999999 
           }
 
-          const diffDays = Math.floor((Date.now() - new Date(computer.lastLogon)) / (1000 * 60 * 60 * 24))
+          const diffDays = Math.max(0, Math.floor((Date.now() - new Date(computer.lastLogon)) / (1000 * 60 * 60 * 24)))
 
           // Classificação extendida para possível remoção (90+ dias)
-          if (diffDays <= 7) {
+          if (diffDays === 0) {
+            return { 
+              status: 'recent', 
+              color: 'text-green-600', 
+              text: 'Hoje', 
+              bgColor: 'bg-green-100',
+              sortValue: 0 
+            }
+          } else if (diffDays <= 7) {
             return { 
               status: 'recent', 
               color: 'text-green-600', 

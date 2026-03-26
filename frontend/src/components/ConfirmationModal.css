@@ -1,0 +1,8 @@
+.cm-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.4); display:flex; align-items:center; justify-content:center; z-index:50; }
+.cm-modal { background:white; padding:1rem; border-radius:0.5rem; width:320px; box-shadow:0 10px 30px rgba(0,0,0,0.15); }
+.cm-title { margin:0 0 0.5rem 0; }
+.cm-body { margin-bottom:1rem; color:#374151; }
+.cm-actions { display:flex; justify-content:flex-end; gap:0.5rem; }
+.cm-btn { padding:0.5rem 0.75rem; border-radius:0.375rem; border:1px solid #E5E7EB; }
+.cm-confirm { background:#2563EB; color:white; border-color:transparent; }
+.cm-cancel { background:#F3F4F6; }

@@ -1,0 +1,103 @@
+
+/* Per-component CSS for ComputersTable. This aims to reproduce the Tailwind look
+   used previously. Adjust values if necessary to match pixel parity. */
+
+.computers-table-wrapper {
+  overflow-x: auto;
+  position: relative;
+  max-height: 70vh;
+}
+
+.computers-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: inherit;
+}
+
+.computers-thead {
+  background: #F9FAFB; /* gray-50 */
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.computers-th {
+  padding: 0.75rem 1rem; /* px-4 py-3 */
+  text-align: left;
+  font-size: 0.625rem; /* text-xs */
+  font-weight: 500;
+  color: #6B7280; /* gray-500 */
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.computers-th--status { width: 5rem; }
+.computers-th--ou { width: 8rem; }
+.computers-th--os { width: 10rem; }
+.computers-th--warranty { width: 9rem; }
+.computers-th--product { width: 8rem; }
+.computers-th--user { width: 10rem; }
+.computers-th--actions { width: 8rem; }
+.computers-th--created { width: 8rem; }
+
+.computers-tbody {
+  background: #ffffff;
+}
+
+.computers-row {
+  cursor: pointer;
+  transition: background-color .15s ease-in-out;
+}
+.computers-row:hover { background: #EFF6FF; /* blue-50 */ }
+
+.computers-td {
+  padding: 0.75rem 1rem;
+  vertical-align: middle;
+}
+
+.computers-td--status { white-space: nowrap; }
+.status-wrap { display:flex; align-items:center; }
+.status { display:flex; align-items:center; }
+.status--active { color: #16A34A; } /* green-600 */
+.status--inactive { color: #DC2626; } /* red-600 */
+.icon-sm { width: 1rem; height: 1rem; margin-right: 0.25rem; }
+.icon-xsmall { width: 0.75rem; height: 0.75rem; margin-right: 0.25rem; }
+.icon-muted { color: #9CA3AF; }
+.status-label, .status .status-label { font-size: 0.6875rem; font-weight:500; }
+
+.created-wrap { display:flex; align-items:center; gap:0.5rem; }
+.ou-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.os-text { font-size:0.875rem; color:#111827; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.os-text--active { color:#1D4ED8; font-weight:600; background:#EFF6FF; padding:0.25rem 0.5rem; border-radius:0.25rem; }
+.os-version { font-size:0.75rem; color:#6B7280; }
+
+.warranty-badge { display:inline-flex; align-items:center; gap:0.25rem; padding:0.125rem 0.5rem; border-radius:9999px; font-size:0.6875rem; font-weight:500; }
+.warranty-badge--highlight { box-shadow: 0 0 0 2px rgba(59,130,246,0.3); }
+.warranty-expire, .warranty-line { font-size:0.75rem; color:#6B7280; margin-top:0.25rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.product-text { font-size:0.875rem; color:#111827; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.user-text .user-current { font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.user-previous { font-size:0.75rem; color:#6B7280; }
+.user-empty { color:#9CA3AF; font-style:italic; font-size:0.75rem; }
+
+.actions-wrap { display:flex; align-items:center; gap:0.5rem; }
+.action-view { display:inline-flex; align-items:center; color:#2563EB; font-size:0.75rem; text-decoration:none; }
+.action-view:hover { color:#1E40AF; }
+.action-toggle { display:inline-flex; align-items:center; gap:0.25rem; padding:0.25rem 0.5rem; border-radius:0.25rem; font-size:0.75rem; font-weight:500; border:1px solid transparent; }
+.action-toggle--disable { background:#DC2626; color:white; }
+.action-toggle--enable { background:#16A34A; color:white; }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.created-wrap { display:flex; align-items:center; gap:0.5rem; }
+.created-text { font-size:0.875rem; color:#6B7280; }
+.created-status { margin-top:0.25rem; }
+.created-success { color:#16A34A; }
+.created-error { color:#DC2626; }
+
+.sticky-right { position: sticky; right: 8rem; background:white; }
+.sticky-right:last-child { right: 0; }
+

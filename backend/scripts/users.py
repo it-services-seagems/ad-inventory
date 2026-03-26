@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Script para buscar usuários logados em máquinas SHQ e atualizar no banco de dados
+Script para buscar usuários logados em máquinas Windows e atualizar no banco de dados.
+
+Estratégia não-invasiva (nenhuma alteração é feita na máquina remota):
+  1. Ping rápido para verificar se a máquina está online
+  2. `query user /server:<NOME>` — usa protocolo RDP, sem WinRM, rápido (~1-2s)
+  3. PsExec + `query user` (read-only) — fallback confiável via Kerberos
+
+Uso:
+  python users.py -m NOME_MAQUINA          # uma máquina específica
+  python users.py -p SHQ -l 10             # prefixo SHQ, limite 10
+  python users.py -l 50                    # 50 primeiras máquinas ativas
+  python users.py -v                       # modo verbose (debug)
 """
 
 import os
@@ -11,500 +22,431 @@ import pyodbc
 import logging
 import argparse
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 import subprocess
 import re
 from pathlib import Path
 
-# Adicionar o diretório backend ao path para importar módulos da API
-backend_dir = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(backend_dir))
+# ── Paths & env ──────────────────────────────────────────────────────────────
+backend_dir = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(backend_dir.parent))
 
-# Carregar variáveis de ambiente
 load_dotenv(dotenv_path=backend_dir / '.env')
 
-# Importar configurações da API principal
 try:
     from fastapi_app.config import SQL_SERVER, SQL_DATABASE, SQL_USERNAME, SQL_PASSWORD, USE_WINDOWS_AUTH
 except ImportError:
-    # Fallback para valores padrão se não conseguir importar
     SQL_SERVER = os.getenv('SQL_SERVER', 'CLOSQL02')
     SQL_DATABASE = os.getenv('SQL_DATABASE', 'DellReports')
     SQL_USERNAME = os.getenv('SQL_USERNAME')
     SQL_PASSWORD = os.getenv('SQL_PASSWORD')
     USE_WINDOWS_AUTH = os.getenv('USE_WINDOWS_AUTH', 'true').lower() == 'true'
 
-# Configurar logging
+# ── Logging ──────────────────────────────────────────────────────────────────
+LOG_DIR = backend_dir / 'logs'
+LOG_DIR.mkdir(exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(asctime)s [%(levelname)-7s] %(message)s',
     handlers=[
-        logging.FileHandler('users_update.log', encoding='utf-8'),
+        logging.FileHandler(LOG_DIR / 'users_update.log', encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
-# Carregar variáveis de ambiente
-load_dotenv()
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  SQL Manager (lightweight, same connection pattern as the API)
+# ═══════════════════════════════════════════════════════════════════════════════
 class SQLManager:
     def __init__(self):
-        self.connection_string = self._build_connection_string()
-        self._test_connection()
-    
-    def _build_connection_string(self):
-        """Constrói string de conexão para SQL Server usando as mesmas configurações da API"""
-        try:
-            if USE_WINDOWS_AUTH:
-                connection_string = f"""
-                    DRIVER={{SQL Server}};
-                    SERVER={SQL_SERVER};
-                    DATABASE={SQL_DATABASE};
-                    Trusted_Connection=yes;
-                """
-            else:
-                connection_string = f"""
-                    DRIVER={{SQL Server}};
-                    SERVER={SQL_SERVER};
-                    DATABASE={SQL_DATABASE};
-                    UID={SQL_USERNAME};
-                    PWD={SQL_PASSWORD};
-                """
-            
-            logger.info(f"[CONFIG] Conectando ao SQL Server: {SQL_SERVER}/{SQL_DATABASE}")
-            logger.info(f"[CONFIG] Usando Windows Auth: {USE_WINDOWS_AUTH}")
-            return connection_string
-            
-        except Exception as e:
-            logger.error(f"[CONFIG] Erro ao construir string de conexão: {e}")
-            raise
-    
-    def _test_connection(self):
-        """Testa conexão com SQL Server"""
-        try:
-            with pyodbc.connect(self.connection_string) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT 1")
-                logger.info("[OK] Conexao SQL Server estabelecida")
-        except Exception as e:
-            logger.error(f"[ERRO] Erro na conexao SQL Server: {e}")
-            raise
-    
-    def get_connection(self):
-        """Retorna nova conexão SQL"""
-        return pyodbc.connect(self.connection_string)
-    
-    def execute_query(self, query, params=None, fetch=True):
-        """Executa query SQL"""
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                
-                if params:
-                    cursor.execute(query, params)
-                else:
-                    cursor.execute(query)
-                
-                if fetch:
-                    columns = [column[0] for column in cursor.description] if cursor.description else []
-                    rows = cursor.fetchall()
-                    return [dict(zip(columns, row)) for row in rows]
-                else:
-                    conn.commit()
-                    return cursor.rowcount
-                    
-        except Exception as e:
-            logger.error(f"[ERRO] Erro SQL: {e}")
-            raise
+        if USE_WINDOWS_AUTH:
+            self.conn_str = (
+                f"DRIVER={{SQL Server}};"
+                f"SERVER={SQL_SERVER};"
+                f"DATABASE={SQL_DATABASE};"
+                f"Trusted_Connection=yes;"
+            )
+        else:
+            self.conn_str = (
+                f"DRIVER={{SQL Server}};"
+                f"SERVER={SQL_SERVER};"
+                f"DATABASE={SQL_DATABASE};"
+                f"UID={SQL_USERNAME};"
+                f"PWD={SQL_PASSWORD};"
+            )
+        with pyodbc.connect(self.conn_str) as conn:
+            conn.cursor().execute("SELECT 1")
+        logger.info(f"SQL Server conectado: {SQL_SERVER}/{SQL_DATABASE}")
 
+    def execute(self, query, params=None, fetch=True):
+        with pyodbc.connect(self.conn_str) as conn:
+            cur = conn.cursor()
+            cur.execute(query, params or ())
+            if fetch:
+                cols = [c[0] for c in cur.description] if cur.description else []
+                return [dict(zip(cols, row)) for row in cur.fetchall()]
+            conn.commit()
+            return cur.rowcount
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  User Manager — estratégia não-invasiva
+# ═══════════════════════════════════════════════════════════════════════════════
 class UserManager:
     def __init__(self):
-        self.sql_manager = SQLManager()
-        self.ad_username = os.getenv('AD_USERNAME', 'SNM\\adm.itservices')
-        self.ad_password = os.getenv('AD_PASSWORD', 'xmZ7P@5vkKzg')
-        
-    def get_shq_computers(self, limit=20, specific_machine=None):
-        """Busca máquinas SHQ do banco de dados"""
-        if specific_machine:
-            # Busca máquina específica
-            query = """
-            SELECT 
-                id,
-                name,
-                dns_hostname,
-                is_enabled,
-                Usuario_Atual
-            FROM computers 
-            WHERE name = ?
-                AND is_enabled = 1
-                AND is_domain_controller = 0
-            """
-            params = (specific_machine,)
-            logger.info(f"[INFO] Buscando maquina especifica: {specific_machine}")
-        else:
-            # Busca máquinas SHQ com limite
-            query = """
-            SELECT TOP (?) 
-                id,
-                name,
-                dns_hostname,
-                is_enabled,
-                Usuario_Atual
-            FROM computers 
-            WHERE name LIKE 'SHQ%' 
-                AND is_enabled = 1
-                AND is_domain_controller = 0
-            ORDER BY name
-            """
-            params = (limit,)
-            logger.info(f"[INFO] Buscando {limit} maquinas SHQ")
-        
-        try:
-            results = self.sql_manager.execute_query(query, params)
-            logger.info(f"[INFO] Encontradas {len(results)} maquinas")
-            return results
-        except Exception as e:
-            logger.error(f"[ERRO] Erro ao buscar maquinas: {e}")
-            return []
-    
-    def get_logged_user_remote(self, computer_name, timeout=30):
-        """Busca usuário logado remotamente via PowerShell.
+        self.sql = SQLManager()
+        self.ad_username = os.getenv('AD_USERNAME', '')
+        self.ad_password = os.getenv('AD_PASSWORD', '')
 
-        Retorna uma tupla: (username_or_None, error_message_or_None).
-        """
-        try:
-            # Script PowerShell para buscar usuário logado remotamente
-            ps_script = f"""
-            try {{
-                $user = (Get-CimInstance Win32_ComputerSystem -ComputerName {computer_name} -ErrorAction Stop).UserName
-                if ($user) {{
-                    Write-Output $user
-                }} else {{
-                    Write-Output "NENHUM_USUARIO"
-                }}
-            }} catch {{
-                Write-Output "ERRO_CONEXAO: $($_.Exception.Message)"
-            }}
-            """
-
-            # Executa PowerShell
-            result = subprocess.run([
-                'powershell.exe',
-                '-Command',
-                ps_script
-            ],
-                capture_output=True,
-                text=True,
-                timeout=timeout
+    # ── buscar máquinas ──────────────────────────────────────────────────────
+    def get_computers(self, limit=50, prefix=None, specific=None):
+        if specific:
+            return self.sql.execute(
+                "SELECT id, name, dns_hostname, Usuario_Atual, Usuario_Anterior "
+                "FROM computers WHERE name = ? AND is_enabled = 1 AND is_domain_controller = 0",
+                (specific,)
             )
+        if prefix:
+            return self.sql.execute(
+                "SELECT TOP (?) id, name, dns_hostname, Usuario_Atual, Usuario_Anterior "
+                "FROM computers WHERE name LIKE ? AND is_enabled = 1 AND is_domain_controller = 0 "
+                "ORDER BY name",
+                (limit, f'{prefix}%')
+            )
+        return self.sql.execute(
+            "SELECT TOP (?) id, name, dns_hostname, Usuario_Atual, Usuario_Anterior "
+            "FROM computers WHERE is_enabled = 1 AND is_domain_controller = 0 "
+            "AND name NOT LIKE '%DC%' AND name NOT LIKE '%SVR%' ORDER BY name",
+            (limit,)
+        )
 
-            if result.returncode != 0:
-                errmsg = result.stderr.strip() or f"returncode={result.returncode}"
-                logger.warning(f"[WARN] PowerShell falhou para {computer_name}: {errmsg}")
-                return (None, errmsg)
-
-            output = result.stdout.strip()
-
-            if output and not output.startswith("NENHUM_USUARIO") and not output.startswith("ERRO_CONEXAO"):
-                return (output, None)
-            else:
-                # Retorna mensagem de erro para que possamos decidir fallback (PsExec)
-                logger.info(f"[INFO] Nenhum usuario logado em {computer_name}: {output}")
-                return (None, output)
-
+    # ── Helper: rodar subprocess com kill forçado (árvore inteira) ───────
+    @staticmethod
+    def _run_cmd(args, timeout=8):
+        """Roda comando e mata TODA a árvore de processos via taskkill se exceder timeout."""
+        proc = None
+        try:
+            proc = subprocess.Popen(
+                args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            stdout, stderr = proc.communicate(timeout=timeout)
+            return (stdout or '', stderr or '', proc.returncode)
         except subprocess.TimeoutExpired:
-            logger.warning(f"[WARN] Timeout ao conectar em {computer_name}")
-            return (None, 'TIMEOUT')
+            if proc:
+                try:
+                    subprocess.run(
+                        ['taskkill', '/F', '/T', '/PID', str(proc.pid)],
+                        capture_output=True, timeout=5,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            return (None, None, 'TIMEOUT')
+        except FileNotFoundError:
+            return (None, None, 'NOT_FOUND')
         except Exception as e:
-            logger.warning(f"[WARN] Nao foi possivel conectar em {computer_name}: {str(e)}")
-            return (None, str(e))
+            if proc:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            return (None, None, str(e))
 
-    def run_psexec_activate(self, computer_name, timeout=10):
-        """Tenta executar PsExec para rodar 'winrm quickconfig -q' remotamente usando credenciais configuradas.
+    # ── Ping check ───────────────────────────────────────────────────────────
+    @staticmethod
+    def _is_online(computer_name):
+        """Ping rápido: 1 pacote, timeout 1500ms."""
+        try:
+            r = subprocess.run(
+                ['ping', '-n', '1', '-w', '1500', computer_name],
+                capture_output=True, timeout=4,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            return r.returncode == 0
+        except Exception:
+            return False
 
-        Retorna tuple (success: bool, output: str).
-        """
-        # Procura PsExec em 3 locais (prioridade):
-        # 1) variável de ambiente PSEXEC_PATH
-        # 2) pasta `psexec` no repositório
-        # 3) caminho hardcoded antigo (fallback)
+    # ── Método 1: query user ─────────────────────────────────────────────────
+    def _try_query_user(self, computer_name):
+        logger.debug(f'  [{computer_name}] query user...')
+        stdout, stderr, rc = self._run_cmd(
+            ['query', 'user', f'/server:{computer_name}'], timeout=5
+        )
+        if rc == 'TIMEOUT':
+            return (None, 'TIMEOUT_QUERY_USER')
+        if isinstance(rc, str):
+            return (None, rc)
+
+        output = (stdout or '').strip()
+        stderr_text = (stderr or '').strip()
+
+        if not output:
+            if 'no user' in stderr_text.lower():
+                return (None, 'NO_USER_LOGGED')
+            return (None, stderr_text or f'rc={rc}')
+
+        for line in output.splitlines()[1:]:
+            parts = line.split()
+            if not parts:
+                continue
+            username = parts[0].lstrip('>')
+            upper = line.upper()
+            if 'ACTIVE' in upper or 'ATIVO' in upper or 'ACTIV' in upper:
+                return (username, None)
+
+        # Nenhuma ativa — retornar primeiro
+        lines = output.splitlines()
+        if len(lines) > 1:
+            first = lines[1].split()
+            if first:
+                return (first[0].lstrip('>'), None)
+
+        return (None, 'NO_ACTIVE_SESSION')
+
+    # ── Método 2: PsExec + query user ────────────────────────────────────────
+    def _try_psexec_query(self, computer_name):
         psexec_env = os.getenv('PSEXEC_PATH')
-        # Caminho correto para a pasta psexec na raiz do repositório
-        repo_default = str(Path(__file__).resolve().parents[3] / 'psexec' / 'PsExec.exe')
-        hardcoded = r'C:\Users\adm.itservices\Downloads\PSTools\PsExec.exe'
+        repo64 = str(backend_dir / 'psexec' / 'PsExec64.exe')
+        repo32 = str(backend_dir / 'psexec' / 'PsExec.exe')
+        psexec = psexec_env or (repo64 if os.path.exists(repo64) else repo32)
 
-        psexec_path = psexec_env or repo_default or hardcoded
-        logger.info(f"[INFO] Usando PsExec em: {psexec_path}")
+        if not os.path.exists(psexec):
+            return (None, 'PSEXEC_NOT_FOUND')
 
-        username = self.ad_username
-        password = os.getenv('AD_PASSWORD', None)
+        # Tentativa 1: Kerberos (sessão atual — sem -u/-p)
+        logger.debug(f'  [{computer_name}] PsExec Kerberos...')
+        args1 = [psexec, f'\\\\{computer_name}', '-accepteula', '-nobanner', 'query', 'user']
+        user, err = self._parse_psexec(args1)
+        if user:
+            return (user, None)
 
-        # Se não existir o executável
-        if not os.path.exists(psexec_path):
-            logger.error(f"[ERROR] PsExec nao encontrado em: {psexec_path}")
-            return (False, 'PSEXEC_NOT_FOUND')
-        target = f"\\\\{computer_name}"
-
-        # Se estiver configurado para usar Windows Auth e não houver senha,
-        # tenta executar PsExec sem -u/-p (usa credenciais do usuário atual)
-        if USE_WINDOWS_AUTH and not password:
-            logger.info(f"[INFO] USE_WINDOWS_AUTH ativo e sem AD_PASSWORD: tentando PsExec com usuario Windows atual para {computer_name}")
-            args = [
-                psexec_path,
-                target,
-                '-accepteula',
-                '-s',
-                'cmd.exe',
-                '/c',
-                'winrm quickconfig -q'
+        # Tentativa 2: credenciais explícitas
+        if self.ad_username and self.ad_password:
+            logger.debug(f'  [{computer_name}] PsExec credenciais...')
+            args2 = [
+                psexec, f'\\\\{computer_name}', '-accepteula', '-nobanner',
+                '-u', self.ad_username, '-p', self.ad_password,
+                'query', 'user'
             ]
-        else:
-            if not password:
-                logger.error(f"[ERROR] PSExec requerido, mas variavel AD_PASSWORD nao configurada para {computer_name}")
-                return (False, 'NO_PASSWORD')
+            user, err2 = self._parse_psexec(args2)
+            if user:
+                return (user, None)
+            return (None, f'kerberos:{err} | cred:{err2}')
 
-            args = [
-                psexec_path,
-                target,
-                '-accepteula',
-                '-h',
-                '-u', username,
-                '-p', password,
-                '-s',
-                'cmd.exe',
-                '/c',
-                'winrm quickconfig -q'
-            ]
+        return (None, err)
 
+    def _parse_psexec(self, args):
+        """Roda PsExec e parseia output de 'query user'."""
+        stdout_raw, stderr_raw, rc = self._run_cmd(args, timeout=10)
+
+        if rc == 'TIMEOUT':
+            return (None, 'TIMEOUT_PSEXEC')
+        if isinstance(rc, str):
+            return (None, rc)
+
+        stdout = (stdout_raw or '').strip()
+        stderr = (stderr_raw or '').strip()
+        output = stdout + '\n' + stderr if stdout and stderr else (stdout or stderr)
+
+        logger.debug(f'  PsExec stdout: {repr(stdout[:150])}')
+        logger.debug(f'  PsExec stderr: {repr(stderr[:150])}')
+
+        if not output.strip():
+            return (None, f'NO_OUTPUT rc={rc}')
+
+        if 'no user' in output.lower():
+            return (None, 'NO_USER_LOGGED')
+
+        # Filtrar ruído
+        noise = [
+            'CONNECTING', 'COPYING', 'STARTING', 'PSEXEC',
+            'COPYRIGHT', 'SYSINTERNALS', 'CMD.EXE',
+            'PROCESS', 'EXITED', '\\\\', 'SUCCESSFULLY',
+            'LOGON', 'IDLE TIME', 'SESSIONNAME', 'USERNAME',
+            'USUARIO', 'NOME DA SESS', 'TEMPO OCIOSO',
+            'ERROR CODE', 'AUTHENTICATION',
+        ]
+        data_lines = []
+        for line in output.splitlines():
+            s = line.strip()
+            if not s or s.startswith('---') or s.startswith('==='):
+                continue
+            upper = s.upper()
+            if any(n in upper for n in noise):
+                continue
+            data_lines.append(s)
+
+        # Sessão ativa
+        for line in data_lines:
+            upper = line.upper()
+            if 'ACTIVE' in upper or 'ATIVO' in upper or 'ACTIV' in upper:
+                parts = line.split()
+                if parts:
+                    return (parts[0].lstrip('>'), None)
+
+        # Qualquer usuário
+        for line in data_lines:
+            parts = line.split()
+            if parts:
+                candidate = parts[0].lstrip('>')
+                if candidate and len(candidate) > 2 and not candidate.isdigit():
+                    return (candidate, None)
+
+        return (None, f'PARSE_FAILED:{output[:100]}')
+
+    # ── Resolver usuário ─────────────────────────────────────────────────────
+    def get_logged_user(self, computer_name):
+        """Ping → query user → PsExec. Retorna (user, method, error)."""
+        logger.debug(f'  [{computer_name}] ping...')
+        if not self._is_online(computer_name):
+            return (None, None, 'OFFLINE')
+
+        errors = []
+
+        user, err = self._try_query_user(computer_name)
+        if user:
+            return (user, 'query_user', None)
+        if err == 'NO_USER_LOGGED':
+            return (None, None, 'NO_USER_LOGGED')
+        errors.append(f'quser:{err}')
+
+        user, err = self._try_psexec_query(computer_name)
+        if user:
+            return (user, 'psexec_query', None)
+        if err == 'NO_USER_LOGGED':
+            return (None, None, 'NO_USER_LOGGED')
+        errors.append(f'psexec:{err}')
+
+        return (None, None, ' | '.join(errors))
+
+    # ── Formatar nome ────────────────────────────────────────────────────────
+    @staticmethod
+    def format_username(raw_user):
+        """'SNM\\philipe.fernandes' ou 'philipe.fernandes' → 'Philipe Fernandes'."""
+        if not raw_user:
+            return raw_user
+        username = raw_user.split('\\')[-1] if '\\' in raw_user else raw_user
+        parts = re.split(r'[._]', username)
+        return ' '.join(p.capitalize() for p in parts if p)
+
+    # ── Atualizar banco ──────────────────────────────────────────────────────
+    def update_user_in_db(self, computer_name, formatted_user):
         try:
-            logger.info(f"[INFO] Tentando PsExec->winrm quickconfig em {computer_name} com {username} (timeout={timeout}s)")
-            proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
-            output = (proc.stdout or '') + '\n' + (proc.stderr or '')
-            rc = proc.returncode
-            if rc == 0:
-                logger.info(f"[INFO] PsExec executado (rc=0) em {computer_name}")
-                return (True, output)
-            else:
-                logger.warning(f"[WARN] PsExec rc={rc} em {computer_name}: {output}")
-                return (False, output)
-        except subprocess.TimeoutExpired:
-            logger.warning(f"[WARN] PsExec timeout em {computer_name} (>{timeout}s)")
-            return (False, 'PSEXEC_TIMEOUT')
-        except Exception as e:
-            logger.error(f"[ERROR] Erro ao executar PsExec em {computer_name}: {e}")
-            return (False, str(e))
-    
-    def format_username(self, domain_user):
-        """Converte SNM\\philipe.fernandes para Philipe Fernandes"""
-        if not domain_user or '\\' not in domain_user:
-            return domain_user
-        
-        try:
-            # Remove o domínio
-            username = domain_user.split('\\')[1]
-            
-            # Remove pontos e converte para nome próprio
-            name_parts = username.replace('.', ' ').split()
-            formatted_name = ' '.join([part.capitalize() for part in name_parts])
-            
-            return formatted_name
-        except Exception as e:
-            logger.warning(f"[WARN] Erro ao formatar usuario {domain_user}: {e}")
-            return domain_user
-    
-    def update_computer_user(self, computer_id, formatted_user):
-        """Atualiza usuário no banco de dados"""
-        try:
-            # Verifica se existe coluna current_user na tabela computers
-            query_check = """
-            SELECT COLUMN_NAME 
-            FROM INFORMATION_SCHEMA.COLUMNS 
-            WHERE TABLE_NAME = 'computers' 
-                AND COLUMN_NAME = 'Usuario_Atual'
-            """
-            
-            result = self.sql_manager.execute_query(query_check)
-            
-            if not result:
-                # Cria a coluna se não existir
-                logger.info("[INFO] Criando coluna current_user na tabela computers...")
-                alter_query = "ALTER TABLE computers ADD current_user NVARCHAR(255)"
-                self.sql_manager.execute_query(alter_query, fetch=False)
-                logger.info("[OK] Coluna current_user criada")
-            
-            # Atualiza o usuário na coluna Usuario_Atual que já existe
-            update_query = """
-            UPDATE computers 
-            SET Usuario_Atual = ?, 
-                updated_at = GETDATE()
-            WHERE id = ?
-            """
-            
-            rows_affected = self.sql_manager.execute_query(
-                update_query, 
-                (formatted_user, computer_id), 
+            rows = self.sql.execute(
+                "SELECT Usuario_Atual FROM computers WHERE name = ?",
+                (computer_name,)
+            )
+            if not rows:
+                return False
+
+            db_current = rows[0].get('Usuario_Atual')
+            if db_current and db_current == formatted_user:
+                return True
+
+            self.sql.execute(
+                "UPDATE computers SET Usuario_Atual = ?, Usuario_Anterior = ?, updated_at = GETDATE() WHERE name = ?",
+                (formatted_user, db_current, computer_name),
                 fetch=False
             )
-            
-            return rows_affected > 0
-            
-        except Exception as e:
-            logger.error(f"[ERRO] Erro ao atualizar usuario no banco: {e}")
+            return True
+        except Exception:
+            logger.exception(f'Erro ao atualizar usuario para {computer_name}')
             return False
-    
+
+    # ── Processar uma máquina ────────────────────────────────────────────────
     def process_computer(self, computer):
-        """Processa uma máquina individualmente"""
-        computer_name = computer['name']
-        computer_id = computer['id']
-        
-        logger.info(f"[PROCESS] Processando {computer_name}...")
-        
-        start_time = time.time()
-        
-        # Busca usuário logado (retorna (user, error))
-        domain_user, error = self.get_logged_user_remote(computer_name)
+        name = computer['name']
+        t0 = time.time()
+        raw_user, method, error = self.get_logged_user(name)
+        elapsed = time.time() - t0
 
-        # Se não obteve usuário e erro sugere que WinRM/remote está desativado, tenta PsExec com credenciais
-        if not domain_user:
-            should_attempt_psexec = False
-            if error:
-                err_up = str(error).upper()
-                # Frases/flags que indicam provável falta de WinRM/remote
-                indicators = ['ERRO_CONEXAO', 'WINRM', 'WSMAN', 'TIMEOUT', 'RPC', 'COULD NOT', 'ACCESS', 'NEGOTIATE']
-                if any(ind in err_up for ind in indicators):
-                    should_attempt_psexec = True
-
-            if should_attempt_psexec:
-                # Tenta ativar WinRM via PsExec e re-tentar
-                ok, psexec_out = self.run_psexec_activate(computer_name, timeout=10)
-                if ok:
-                    # Aguarda curto tempo e tenta buscar usuário novamente com timeout reduzido
-                    time.sleep(2)
-                    domain_user, error = self.get_logged_user_remote(computer_name, timeout=10)
-
-        if domain_user:
-            # Formata o nome do usuário
-            formatted_user = self.format_username(domain_user)
-
-            # Atualiza no banco
-            success = self.update_computer_user(computer_id, formatted_user)
-
-            elapsed = time.time() - start_time
-
-            if success:
-                logger.info(f"[SUCCESS] {computer_name}: {domain_user} -> {formatted_user} ({elapsed:.1f}s)")
-                return {
-                    'computer': computer_name,
-                    'success': True,
-                    'domain_user': domain_user,
-                    'formatted_user': formatted_user,
-                    'elapsed': elapsed
-                }
+        if not raw_user:
+            if error == 'OFFLINE':
+                logger.info(f"  SKIP {name}: offline ({elapsed:.1f}s)")
+            elif error == 'NO_USER_LOGGED':
+                logger.info(f"  SKIP {name}: ninguem logado ({elapsed:.1f}s)")
             else:
-                logger.error(f"[ERRO] {computer_name}: Falha ao atualizar no banco")
-                return {
-                    'computer': computer_name,
-                    'success': False,
-                    'error': 'Falha ao atualizar no banco',
-                    'elapsed': elapsed
-                }
+                logger.warning(f"  FAIL {name}: {error} ({elapsed:.1f}s)")
+            return {'computer': name, 'success': False, 'error': error, 'elapsed': elapsed}
+
+        formatted = self.format_username(raw_user)
+        saved = self.update_user_in_db(name, formatted)
+
+        if saved:
+            logger.info(f"  OK {name}: {raw_user} → {formatted} [{method}] ({elapsed:.1f}s)")
         else:
-            elapsed = time.time() - start_time
-            logger.warning(f"[WARN] {computer_name}: Usuario nao encontrado ({elapsed:.1f}s) - erro: {error}")
-            return {
-                'computer': computer_name,
-                'success': False,
-                'error': 'Usuario nao encontrado',
-                'detail': error,
-                'elapsed': elapsed
-            }
-    
-    def run_user_update(self, limit=20, max_workers=5, specific_machine=None):
-        """Executa atualização de usuários para máquinas SHQ"""
-        if specific_machine:
-            logger.info(f"[START] Iniciando atualizacao de usuario para maquina: {specific_machine}")
-        else:
-            logger.info(f"[START] Iniciando atualizacao de usuarios para {limit} maquinas SHQ...")
-        
-        start_time = time.time()
-        
-        # Busca máquinas
-        computers = self.get_shq_computers(limit, specific_machine)
-        
+            logger.warning(f"  FAIL {name}: {raw_user} → DB save falhou ({elapsed:.1f}s)")
+
+        return {
+            'computer': name, 'success': saved,
+            'raw_user': raw_user, 'formatted_user': formatted,
+            'method': method, 'elapsed': elapsed
+        }
+
+    # ── Executar (sequencial) ────────────────────────────────────────────────
+    def run(self, limit=50, prefix=None, specific=None):
+        computers = self.get_computers(limit, prefix, specific)
         if not computers:
-            if specific_machine:
-                logger.warning(f"[WARN] Maquina {specific_machine} nao encontrada")
-            else:
-                logger.warning("[WARN] Nenhuma maquina SHQ encontrada")
+            logger.warning("Nenhuma maquina encontrada com os filtros informados")
             return
-        
-        results = []
-        success_count = 0
-        
-        # Processa máquinas em paralelo (limitado)
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_computer = {
-                executor.submit(self.process_computer, computer): computer 
-                for computer in computers
-            }
-            
-            for future in as_completed(future_to_computer):
-                result = future.result()
-                results.append(result)
-                
-                if result['success']:
-                    success_count += 1
-        
-        total_time = time.time() - start_time
-        
-        # Relatório final
-        logger.info("=" * 60)
-        logger.info(f"[REPORT] RELATORIO FINAL")
-        logger.info(f"Total de maquinas: {len(computers)}")
-        logger.info(f"Sucessos: {success_count}")
-        logger.info(f"Falhas: {len(computers) - success_count}")
-        logger.info(f"Tempo total: {total_time:.1f}s")
-        logger.info(f"Tempo medio por maquina: {total_time/len(computers):.1f}s")
-        logger.info("=" * 60)
-        
-        # Log detalhado dos resultados
-        for result in results:
+
+        total = len(computers)
+        logger.info(f"Processando {total} maquinas...")
+        t0 = time.time()
+
+        ok = no_user = offline = errors = 0
+
+        for i, computer in enumerate(computers, 1):
+            logger.info(f"[{i}/{total}] {computer['name']}...")
+            result = self.process_computer(computer)
+
             if result['success']:
-                logger.info(f"[OK] {result['computer']}: {result['formatted_user']}")
+                ok += 1
+            elif result.get('error') == 'OFFLINE':
+                offline += 1
+            elif result.get('error') == 'NO_USER_LOGGED':
+                no_user += 1
+            elif result.get('error') and 'TIMEOUT' in str(result['error']):
+                offline += 1
             else:
-                logger.warning(f"[FAIL] {result['computer']}: {result['error']}")
+                errors += 1
+
+        total_time = time.time() - t0
+        logger.info("=" * 60)
+        logger.info(f"RELATORIO — {total} maquinas em {total_time:.1f}s")
+        logger.info(f"  Atualizados: {ok}  |  Sem usuario: {no_user}  |  Offline: {offline}  |  Erros: {errors}")
+        logger.info("=" * 60)
+
 
 def main():
-    """Função principal"""
-    parser = argparse.ArgumentParser(description='Atualiza usuarios logados em maquinas SHQ')
-    parser.add_argument('-m', '--machine', 
-                       help='Nome da maquina especifica para processar (ex: SHQ001)')
-    parser.add_argument('-l', '--limit', 
-                       type=int, 
-                       default=20,
-                       help='Numero maximo de maquinas SHQ para processar (padrao: 20)')
-    parser.add_argument('-w', '--workers', 
-                       type=int, 
-                       default=3,
-                       help='Numero de threads paralelas (padrao: 3)')
-    
+    parser = argparse.ArgumentParser(
+        description='Busca usuario logado em maquinas Windows e atualiza o banco'
+    )
+    parser.add_argument('-m', '--machine', help='Nome de uma maquina especifica')
+    parser.add_argument('-p', '--prefix', help='Prefixo (ex: SHQ, DIA, ESM)')
+    parser.add_argument('-l', '--limit', type=int, default=50, help='Limite (padrao: 50)')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Debug logs')
     args = parser.parse_args()
-    
+
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+
     try:
-        user_manager = UserManager()
-        user_manager.run_user_update(
-            limit=args.limit, 
-            max_workers=args.workers,
-            specific_machine=args.machine
-        )
-        
+        mgr = UserManager()
+        mgr.run(limit=args.limit, prefix=args.prefix, specific=args.machine)
     except KeyboardInterrupt:
-        logger.info("[STOP] Processo interrompido pelo usuario")
-    except Exception as e:
-        logger.error(f"[CRITICAL] Erro critico: {e}")
+        logger.info("Interrompido pelo usuario")
+    except Exception:
+        logger.exception("Erro critico")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

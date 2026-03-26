@@ -90,7 +90,12 @@ class SQLManager:
                     cursor.execute(query)
 
                 if fetch:
-                    columns = [column[0] for column in cursor.description] if cursor.description else []
+                    # Auto-detect non-SELECT statements to avoid fetchall() on UPDATE/INSERT/DELETE
+                    if cursor.description is None:
+                        # No result set — this was a DML statement; commit and return rowcount
+                        conn.commit()
+                        return cursor.rowcount
+                    columns = [column[0] for column in cursor.description]
                     rows = cursor.fetchall()
                     return [dict(zip(columns, row)) for row in rows]
                 else:
@@ -402,17 +407,21 @@ class SQLManager:
             existing = self.execute_query(check_query, [name])
             
             # Preparar dados básicos para inserção/atualização
-            dns_hostname = computer_data.get('dNSHostName', '')
-            distinguished_name = computer_data.get('distinguishedName', '')
+            # Handle both naming conventions: AD Manager output (camelCase) and raw AD data
+            dns_hostname = computer_data.get('dNSHostName') or computer_data.get('dnsHostName') or computer_data.get('dns_hostname') or ''
+            distinguished_name = computer_data.get('distinguishedName') or computer_data.get('dn') or computer_data.get('distinguished_name') or ''
             description = computer_data.get('description', '')
             is_enabled = bool(computer_data.get('userAccountControl', 0) & 0x0002 == 0)  # ACCOUNTDISABLE flag
-            user_account_control = computer_data.get('userAccountControl', 0)
-            primary_group_id = computer_data.get('primaryGroupID', 515)
-            sam_account_name = computer_data.get('sAMAccountName', name)
+            # If AD Manager already computed 'disabled', use it as fallback
+            if 'disabled' in computer_data and 'userAccountControl' not in computer_data:
+                is_enabled = not computer_data.get('disabled', False)
+            user_account_control = computer_data.get('userAccountControl') or computer_data.get('user_account_control') or 0
+            primary_group_id = computer_data.get('primaryGroupID') or computer_data.get('primary_group_id') or 515
+            sam_account_name = computer_data.get('sAMAccountName') or computer_data.get('sam_account_name') or name
             
-            # Processar timestamps
-            last_logon = computer_data.get('lastLogonTimestamp')
-            created_date = computer_data.get('whenCreated')
+            # Processar timestamps — handle both raw AD field names and AD Manager normalized names
+            last_logon = computer_data.get('lastLogonTimestamp') or computer_data.get('lastLogon') or computer_data.get('last_logon_timestamp')
+            created_date = computer_data.get('whenCreated') or computer_data.get('created') or computer_data.get('created_date')
             
             # Buscar ou criar sistema operacional
             operating_system_id = None
@@ -492,6 +501,78 @@ class SQLManager:
         except Exception as e:
             logger.exception(f'Erro ao sincronizar computador {computer_data.get("name", "unknown")}: {e}')
             return None
+
+    def update_os_for_computer(self, computer_id, os_name, os_version=None):
+        """Update operating_system_id for a single computer given its OS name from AD.
+        
+        This is called after warranty updates or individual syncs to ensure OS is always saved.
+        """
+        if not os_name or not computer_id:
+            return False
+        try:
+            operating_system_id = self.get_or_create_operating_system(os_name, os_version)
+            if operating_system_id:
+                self.execute_query(
+                    "UPDATE computers SET operating_system_id = ? WHERE id = ? AND (operating_system_id IS NULL OR operating_system_id != ?)",
+                    params=[operating_system_id, computer_id, operating_system_id],
+                    fetch=False
+                )
+                return True
+        except Exception:
+            logger.exception(f'update_os_for_computer failed for computer_id={computer_id}')
+        return False
+
+    def update_os_for_computer_by_name(self, computer_name):
+        """Resolve OS from AD data and update operating_system_id in SQL for a single computer.
+        
+        Used after warranty updates to keep OS in sync.
+        """
+        if not computer_name:
+            return False
+        try:
+            # Import AD manager lazily to avoid circular imports
+            from . import ad_manager
+            all_computers = ad_manager.get_computers()
+            ad_computer = next((c for c in all_computers if c.get('name') == computer_name), None)
+            if not ad_computer:
+                return False
+            
+            os_name = ad_computer.get('os')
+            os_version = ad_computer.get('osVersion')
+            if not os_name or os_name == 'N/A':
+                return False
+            
+            # Get computer ID from SQL  
+            rows = self.execute_query("SELECT id FROM computers WHERE name = ?", params=[computer_name])
+            if not rows:
+                return False
+            computer_id = rows[0]['id']
+            
+            return self.update_os_for_computer(computer_id, os_name, os_version)
+        except Exception:
+            logger.exception(f'update_os_for_computer_by_name failed for {computer_name}')
+            return False
+
+    def update_last_logon(self, computer_name, last_logon_iso):
+        """Update last_logon_timestamp in SQL for a single computer.
+        
+        Only updates if the new value is more recent than the stored value.
+        """
+        if not computer_name or not last_logon_iso:
+            return False
+        try:
+            self.execute_query(
+                """UPDATE computers 
+                   SET last_logon_timestamp = ?
+                   WHERE name = ? 
+                     AND (last_logon_timestamp IS NULL OR last_logon_timestamp < ?)""",
+                params=[last_logon_iso, computer_name, last_logon_iso],
+                fetch=False
+            )
+            return True
+        except Exception:
+            logger.exception(f'update_last_logon failed for {computer_name}')
+            return False
 
     def update_computer_status_in_sql(self, computer_name, is_enabled, user_account_control=None):
         try:

@@ -74,10 +74,23 @@ async def startup_event():
         # don't fail startup; log reason for easier debugging
         print(f"ℹ️ Could not import legacy backend.app managers: {e}")
 
+    # Iniciar scheduler de detecção de usuários (seg-sex, 7h-19h)
+    try:
+        from .managers.user_detect_service import user_detect_scheduler
+        user_detect_scheduler.start()
+        print('🕐 UserDetectScheduler iniciado (seg-sex, 7h-19h, a cada 1h)')
+    except Exception as e:
+        print(f'⚠️ Erro ao iniciar UserDetectScheduler: {e}')
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
     print(" FastAPI shutdown event")
+    try:
+        from .managers.user_detect_service import user_detect_scheduler
+        user_detect_scheduler.stop()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

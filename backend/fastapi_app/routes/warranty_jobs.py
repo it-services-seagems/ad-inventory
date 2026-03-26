@@ -201,6 +201,13 @@ def start_warranty_refresh(background_tasks: BackgroundTasks, mode: Optional[str
                             if computer_id:
                                 try:
                                     sql_manager.save_warranty_to_database(computer_id, processed)
+                                    
+                                    # Also update OS for this computer (sync from AD)
+                                    try:
+                                        sql_manager.update_os_for_computer_by_name(computer_name)
+                                    except Exception:
+                                        pass  # non-critical
+                                    
                                     success_count += 1
                                     _jobs[jid]['current_batch_items'].append({
                                         'service_tag': service_tag,

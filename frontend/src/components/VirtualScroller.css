@@ -1,0 +1,5 @@
+.virtual-scroller { display:flex; flex-direction:column; gap:0.5rem; }
+.virtual-list { display:block; }
+.virtual-controls { display:flex; align-items:center; gap:0.5rem; justify-content:flex-end; }
+.virtual-controls button { padding:0.25rem 0.5rem; border-radius:0.25rem; border:1px solid #E5E7EB; background:white; }
+.virtual-page { font-size:0.875rem; color:#374151; }

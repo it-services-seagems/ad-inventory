@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Monitor, Calendar, Shield, RefreshCw, AlertTriangle, ShieldOff, ShieldAlert, Network, Server, Search, MapPin, CheckCircle } from 'lucide-react'
+import { ArrowLeft, Monitor, Calendar, Shield, RefreshCw, AlertTriangle, ShieldOff, ShieldAlert, Network, Server, Search, MapPin, CheckCircle, Edit3, UserCheck } from 'lucide-react'
 import api, { apiMethods } from '../services/api'
 import { useToast } from '../components/Toast'
 import ConfirmationModal from '../components/ConfirmationModal'
@@ -17,6 +17,8 @@ const ComputerDetail = () => {
   const [loading, setLoading] = useState(true)
   const [warrantyLoading, setWarrantyLoading] = useState(false)
   const [dhcpLoading, setDhcpLoading] = useState(false)
+  const [editingDescription, setEditingDescription] = useState(false)
+  const [newDescription, setNewDescription] = useState('')
   
   // Estados para atribuição de usuário
   const [showUserAssignModal, setShowUserAssignModal] = useState(false)
@@ -122,6 +124,7 @@ const ComputerDetail = () => {
 
           // Apply the normalized object to state so rest of UI can use consistent keys
           setComputer(normalized)
+          setNewDescription(normalized.description || '')
         } catch (e) {
           console.warn('Failed to normalize computer data:', e)
           setComputer(computerData)
@@ -151,39 +154,59 @@ const ComputerDetail = () => {
 
 
 
-  // NOVA FUNÇÃO: busca o usuário atualmente logado na máquina via endpoint criado
-  const fetchCurrentUser = async (force = false) => {
+  // NOVA FUNÇÃO: detecta o usuário logado na máquina via ping + query user + PsExec
+  const fetchCurrentUser = async () => {
     try {
       setCurrentUserLiveLoading(true)
-      console.log(`🔍 Buscando usuário atual da máquina: ${computerName}`)
+      console.log(`🔍 Detectando usuário logado em: ${computerName}`)
 
-      const resp = await api.get(`/computers/${encodeURIComponent(computerName)}/current-user${force ? '?force=true' : ''}`)
+      const resp = await api.post(`/computers/${encodeURIComponent(computerName)}/detect-user`)
 
-      // A API retorna diferentes formatos dependendo do resultado
-      // Ex.: { status: 'ok', usuario_atual: 'DOMAIN\\user', serial_number: 'XYZ', saved: true }
-      // ou { status: 'unreachable', message: 'Could not connect' }
-      // ou { status: 'skipped', message: 'Machine is server or domain controller - skipped' }
-
-      if (resp.status === 200 && resp.data) {
+      if (resp.data) {
         const d = resp.data
-        console.log('📊 Resposta da API current-user:', d)
-        // Store the full response object so display logic can handle all statuses properly
+        console.log('📊 Resposta detect-user:', d)
         setCurrentUserLive(d)
-      } else {
-        setCurrentUserLive({ status: 'error', message: 'Erro na comunicação com a API' })
+
+        // Se detectou usuário com sucesso, atualizar o state do computador
+        if (d.status === 'ok' && d.usuario_atual) {
+          setComputer(prev => ({
+            ...prev,
+            currentUser: d.usuario_atual,
+            usuario_atual: d.usuario_atual
+          }))
+          showToast(`Usuário detectado: ${d.usuario_atual} (${d.method}, ${d.elapsed}s)`, 'success')
+        } else if (d.status === 'offline') {
+          showToast('Máquina offline — não responde ao ping', 'warning')
+        } else if (d.status === 'no_user') {
+          showToast('Nenhum usuário logado na máquina', 'info')
+        } else {
+          showToast(`Não foi possível detectar o usuário: ${d.error || 'erro desconhecido'}`, 'error')
+        }
       }
     } catch (error) {
-      console.error('Erro ao buscar usuário atual:', error)
-      // Se servidor responder com 412 (skipped), axios rejeita. Tratamos aqui.
-      if (error.response && error.response.status === 412) {
-        setCurrentUserLive({ status: 'skipped', message: 'Servidor/DC (não aplicável)' })
-      } else if (error.response && (error.response.status === 503 || error.response.status === 504)) {
-        setCurrentUserLive({ status: 'unreachable', message: 'Serviço indisponível' })
+      console.error('Erro ao detectar usuário:', error)
+      if (error.response?.status === 504) {
+        setCurrentUserLive({ status: 'offline', message: 'Máquina offline' })
+        showToast('Máquina offline — não responde ao ping', 'warning')
       } else {
         setCurrentUserLive({ status: 'error', message: 'Erro de conexão' })
+        showToast('Erro ao detectar usuário', 'error')
       }
     } finally {
       setCurrentUserLiveLoading(false)
+    }
+  }
+  
+  const saveDescription = async () => {
+    try {
+      const payload = { description: newDescription }
+      await api.post(`/computers/${encodeURIComponent(computerName)}/description`, payload)
+      showToast('Descrição atualizada com sucesso', 'success')
+      setComputer(prev => ({ ...prev, description: newDescription }))
+      setEditingDescription(false)
+    } catch (error) {
+      console.error('Erro ao salvar descrição:', error)
+      showToast('Erro ao atualizar descrição', 'error')
     }
   }
 
@@ -797,9 +820,11 @@ const ComputerDetail = () => {
     
     const lastLogonDate = new Date(lastLogon)
     const now = new Date()
-    const diffDays = Math.floor((now - lastLogonDate) / (1000 * 60 * 60 * 24))
+    const diffDays = Math.max(0, Math.floor((now - lastLogonDate) / (1000 * 60 * 60 * 24)))
     
-    if (diffDays <= 7) {
+    if (diffDays === 0) {
+      return { status: 'recent', color: 'bg-green-100 text-green-800', text: 'Logou hoje' }
+    } else if (diffDays <= 7) {
       return { status: 'recent', color: 'bg-green-100 text-green-800', text: 'Ativo recentemente' }
     } else if (diffDays <= 30) {
       return { status: 'moderate', color: 'bg-yellow-100 text-yellow-800', text: 'Moderadamente ativo' }
@@ -914,6 +939,8 @@ const ComputerDetail = () => {
   const loginStatus = getLastLoginStatus(computer.lastLogon)
   const warrantyStatus = getWarrantyStatus(warranty)
   const dhcpStatus = getDHCPStatus(dhcpInfo)
+  const rawMacFromDhcp = (dhcpInfo && dhcpInfo.search_results && dhcpInfo.search_results[0] && (dhcpInfo.search_results[0].mac_address || dhcpInfo.search_results[0].mac)) || dhcpInfo?.mac_address || computer?.mac
+  const macToShow = rawMacFromDhcp ? formatMac(rawMacFromDhcp) : null
 
   return (
     <div className="space-y-6">
@@ -995,6 +1022,11 @@ const ComputerDetail = () => {
                   {dhcpStatus.text}
                 </span>
               )}
+              {macToShow && (
+                <div className="mt-2 text-sm text-gray-700">
+                  <div>MAC: <span className="font-mono">{macToShow}</span></div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1030,10 +1062,6 @@ const ComputerDetail = () => {
               <dd className="text-sm text-gray-900">{computer.os}</dd>
             </div>
             <div>
-              <dt className="text-sm font-medium text-gray-500">Endereço MAC</dt>
-              <dd className="text-sm text-gray-900 font-mono">{formatMac(computer.mac)}</dd>
-            </div>
-            <div>
               <dt className="text-sm font-medium text-gray-500">Versão do OS</dt>
               <dd className="text-sm text-gray-900">{computer.osVersion || 'N/A'}</dd>
             </div>
@@ -1049,7 +1077,26 @@ const ComputerDetail = () => {
             </div>
             <div>
               <dt className="text-sm font-medium text-gray-500">Descrição</dt>
-              <dd className="text-sm text-gray-900">{computer.description || 'Sem descrição'}</dd>
+              <dd className="text-sm text-gray-900">
+                {editingDescription ? (
+                  <div className="flex items-center space-x-2">
+                    <input
+                      value={newDescription}
+                      onChange={(e) => setNewDescription(e.target.value)}
+                      className="px-2 py-1 border border-gray-300 rounded-md w-full"
+                    />
+                    <button onClick={saveDescription} className="px-3 py-1 bg-green-600 text-white rounded-md">Salvar</button>
+                    <button onClick={() => { setEditingDescription(false); setNewDescription(computer.description || '') }} className="px-3 py-1 bg-gray-100 rounded-md">Cancelar</button>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between">
+                    <div className="truncate">{computer.description || 'Sem descrição'}</div>
+                    <button onClick={() => setEditingDescription(true)} className="ml-4 text-gray-500 hover:text-gray-700" title="Editar descrição">
+                      <Edit3 className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
+              </dd>
             </div>
             <div>
               <dt className="text-sm font-medium text-gray-500">DNS Hostname</dt>
@@ -1075,7 +1122,19 @@ const ComputerDetail = () => {
                     <div className="font-medium">{computer.currentUser || currentUserLive?.usuario_atual || 'Nenhum'}</div>
                     <div className="text-xs text-gray-500">Usuário anterior: {computer.previousUser || 'N/A'}</div>
                   </div>
-                  <div>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={fetchCurrentUser}
+                      disabled={currentUserLiveLoading}
+                      className="flex items-center space-x-1 px-2 py-1 text-sm font-medium text-blue-700 bg-blue-50 rounded hover:bg-blue-100 disabled:opacity-50 transition-colors"
+                      title="Detectar usuário logado na máquina (ping + query user + PsExec)"
+                    >
+                      {currentUserLiveLoading
+                        ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                        : <UserCheck className="h-3.5 w-3.5" />
+                      }
+                      <span>{currentUserLiveLoading ? 'Detectando...' : 'Detectar'}</span>
+                    </button>
                     {computer.currentUser || currentUserLive?.usuario_atual ? (
                       <button
                         onClick={handleUnassignUser}
@@ -1122,7 +1181,7 @@ const ComputerDetail = () => {
               <dt className="text-sm font-medium text-gray-500">Dias desde último login</dt>
               <dd className="text-sm text-gray-900">
                 {computer.lastLogon ? 
-                  Math.floor((new Date() - new Date(computer.lastLogon)) / (1000 * 60 * 60 * 24)) + ' dias'
+                  (() => { const d = Math.max(0, Math.floor((new Date() - new Date(computer.lastLogon)) / (1000 * 60 * 60 * 24))); return d === 0 ? 'Hoje' : `${d} dias`; })()
                   : 'Nunca logou'
                 }
               </dd>
@@ -1297,7 +1356,7 @@ const ComputerDetail = () => {
                 </dt>
                 <dd className="text-sm text-gray-900 font-mono bg-gray-50 px-2 py-1 rounded flex items-center">
                   <Server className="h-4 w-4 mr-1 text-gray-600" />
-                  {dhcpInfo.dhcp_server || 'N/A'}
+                  {dhcpInfo.network_type === 'onshore' ? 'N/A' : (dhcpInfo.dhcp_server || 'N/A')}
                 </dd>
               </div>
               <div>

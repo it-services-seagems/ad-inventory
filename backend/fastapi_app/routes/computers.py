@@ -1,6 +1,6 @@
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response, BackgroundTasks
 from fastapi.responses import JSONResponse
-from datetime import datetime
+from datetime import datetime, timezone
 import time
 import re
 import logging
@@ -29,6 +29,16 @@ def list_computers(source: str = 'sql', inventory_filter: str = None):
 @computers_router.get('/details/{computer_name}')
 def computer_details(computer_name: str):
     try:
+        # Refresh lastLogon from AD in background so it's always fresh
+        ad_last_logon = None
+        try:
+            ad_data = ad_computer_manager.find_computer(computer_name)
+            ad_last_logon = ad_data.get('lastLogon') if ad_data else None
+            if ad_last_logon:
+                sql_manager.update_last_logon(computer_name, ad_last_logon)
+        except Exception:
+            logger.warning(f'Could not refresh lastLogon from AD for {computer_name}')
+
         # Use a richer query (join OS and organization) similar to the legacy Flask app
         q = """
         SELECT TOP 1
@@ -58,8 +68,18 @@ def computer_details(computer_name: str):
         WHERE c.name = ?"""
         rows = sql_manager.execute_query(q, params=(computer_name,))
         if rows:
-            # Format the result similar to Flask route
             computer = rows[0]
+            # Convert naive datetime fields to UTC-aware ISO strings so JS interprets timezone correctly
+            for dt_field in ('lastLogon', 'created', 'last_sync_ad'):
+                val = computer.get(dt_field)
+                if val and hasattr(val, 'isoformat'):
+                    # SQL Server returns naive datetimes — these are actually UTC
+                    if val.tzinfo is None:
+                        val = val.replace(tzinfo=timezone.utc)
+                    computer[dt_field] = val.isoformat()
+            # If SQL still has no lastLogon but AD returned one, inject it directly
+            if not computer.get('lastLogon') and ad_last_logon:
+                computer['lastLogon'] = ad_last_logon
             return computer
         raise HTTPException(status_code=404, detail='Computer not found')
     except HTTPException:
@@ -124,6 +144,71 @@ def toggle_status(computer_name: str, payload: dict, response: Response):
                 pass
 
         result['timestamp'] = datetime.now().isoformat() if 'datetime' in globals() else None
+        return JSONResponse(content=result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@computers_router.post('/{computer_name}/description')
+def update_computer_description(computer_name: str, payload: dict):
+    """Update AD `description` attribute for a computer."""
+    if not computer_name or not computer_name.strip():
+        raise HTTPException(status_code=400, detail='Nome da máquina é obrigatório')
+
+    if not payload or 'description' not in payload:
+        raise HTTPException(status_code=400, detail='Campo "description" é obrigatório no body')
+
+    description = payload.get('description')
+    use_powershell = payload.get('use_powershell', False)
+
+    try:
+        result = None
+        try:
+            if not use_powershell:
+                result = ad_computer_manager.set_computer_description(computer_name, description)
+            else:
+                raise Exception('PowerShell requested')
+        except Exception as ldap_err:
+            try:
+                result = ad_computer_manager.set_computer_description_powershell(computer_name, description)
+            except Exception as ps_err:
+                raise HTTPException(status_code=500, detail=f"Ambos os métodos falharam. LDAP: {ldap_err}. PowerShell: {ps_err}")
+
+        # Update SQL cache if present (non-blocking)
+        if result.get('success'):
+            try:
+                q = "UPDATE computers SET description = ? WHERE name = ?"
+                sql_manager.execute_query(q, params=(description, computer_name), fetch=False)
+                result['cache_updated'] = True
+            except Exception:
+                pass
+
+        # Also attempt to sync this single computer from AD into SQL so frontend sees immediate changes
+        try:
+            ad_computer = None
+            try:
+                ad_computer = ad_computer_manager.find_computer(computer_name)
+            except Exception:
+                try:
+                    all_ad = ad_manager.get_computers()
+                    ad_computer = next((c for c in all_ad if c.get('name') == computer_name), None)
+                except Exception:
+                    ad_computer = None
+
+            if ad_computer:
+                try:
+                    sql_manager.sync_computer_to_sql(ad_computer)
+                    result['sql_synced'] = True
+                except Exception:
+                    result['sql_synced'] = False
+            else:
+                result['sql_synced'] = False
+        except Exception:
+            # non-critical; do not fail the request if sync step fails
+            result['sql_synced'] = False
+
         return JSONResponse(content=result)
     except HTTPException:
         raise
@@ -231,6 +316,12 @@ def get_computer_warranty(computer_name: str, force: bool = False):
             except Exception:
                 pass
 
+            # Also update OS for this computer (sync from AD)
+            try:
+                sql_manager.update_os_for_computer_by_name(computer_name)
+            except Exception:
+                pass  # non-critical
+
             # Format response payload similar to frontend expectations
             def _fmt_date(d):
                 try:
@@ -323,6 +414,12 @@ def refresh_computer_warranty(computer_name: str):
             except Exception:
                 # Non-blocking: log is done inside sql_manager
                 pass
+
+            # Also update OS for this computer (sync from AD)
+            try:
+                sql_manager.update_os_for_computer_by_name(computer_name)
+            except Exception:
+                pass  # non-critical
 
             # Build a warranty_data object compatible with frontend expectations
             def _fmt_date(d):
@@ -827,3 +924,51 @@ def get_user_by_service_tag(service_tag: str):
             'usuario_atual': None,
             'message': f'Erro interno: {str(e)}'
         }, status_code=500)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Detecção de usuário logado (delegado ao user_detect_service)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from ..managers.user_detect_service import detect_user as _detect_user, run_bulk_detect_onshore as _run_bulk_detect_onshore
+
+
+@computers_router.post('/{computer_name}/detect-user')
+def detect_user_route(computer_name: str):
+    """Detecta o usuário logado na máquina usando ping + query user + PsExec (não-invasivo)."""
+    try:
+        result = _detect_user(computer_name)
+        status_code = 200 if result['status'] in ('ok', 'no_user') else (
+            504 if result['status'] == 'offline' else 500
+        )
+        return JSONResponse(content=result, status_code=status_code)
+    except Exception as e:
+        logger.exception(f'Erro em detect-user para {computer_name}')
+        return JSONResponse(content={
+            'status': 'error',
+            'computer_name': computer_name,
+            'error': str(e)
+        }, status_code=500)
+
+
+@computers_router.post('/detect-users-onshore')
+def detect_users_onshore(background_tasks: BackgroundTasks):
+    """Dispara detecção de usuários para todas as máquinas onshore (SHQ*) em background."""
+    try:
+        rows = sql_manager.execute_query(
+            "SELECT COUNT(*) as total FROM computers "
+            "WHERE is_enabled = 1 AND is_domain_controller = 0 "
+            "AND name LIKE 'SHQ%' "
+            "AND name NOT LIKE '%DC%' AND name NOT LIKE '%SVR%'"
+        )
+        total = rows[0]['total'] if rows else 0
+        background_tasks.add_task(_run_bulk_detect_onshore)
+        return JSONResponse(content={
+            'status': 'started',
+            'message': f'Detecção de usuários iniciada para {total} máquinas onshore (SHQ*)',
+            'total_machines': total
+        })
+    except Exception as e:
+        logger.exception('Erro ao iniciar detect-users-onshore')
+        return JSONResponse(content={'status': 'error', 'error': str(e)}, status_code=500)
+

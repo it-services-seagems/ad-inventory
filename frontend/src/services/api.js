@@ -1,9 +1,8 @@
 import axios from 'axios'
 
-// NOTE: Force the backend API IP and port for this deployment
-// Previously this used Vite's VITE_API_URL fallback; we now explicitly use the
-// target IP so the frontend always talks to the backend at 10.15.2.19:42057.
-const API_BASE = import.meta.env.api_url
+// NOTE: Prefer Vite-provided `VITE_API_URL`. Fall back to the known IP.
+// This ensures the frontend talks to the intended backend (10.15.2.19:42057).
+const API_BASE = import.meta.env.VITE_API_URL || 'http://10.15.2.19:42057/api'
 
 const api = axios.create({
   baseURL: API_BASE,
