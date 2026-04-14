@@ -1,3 +1,18 @@
+import sys
+import os
+import importlib
+
+# --- FIX PARA AMBIENTE DE SERVIÇO (NSSM) ---
+# Garante que o Python encontre a pasta 'backend' e 'fastapi_app'
+current_dir = os.path.dirname(os.path.abspath(__file__)) # pasta fastapi_app
+parent_dir = os.path.dirname(current_dir)                # pasta backend
+root_dir = os.path.dirname(parent_dir)                  # raiz do projeto
+
+for path in [current_dir, parent_dir, root_dir]:
+    if path not in sys.path:
+        sys.path.append(path)
+# -------------------------------------------
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -11,15 +26,13 @@ from .connections import test_all_connections
 from .routes.debug_routes import debug_router
 
 app = FastAPI(title="AD Inventory FastAPI",
-              description="Backend para o sistema de inventário de computadores AD  ",
+              description="Backend para o sistema de inventário de computadores AD",
               version="0.1")
 
-# Add root endpoint for health check
 @app.get("/")
 async def root():
     return {"message": "AD Inventory API is running", "status": "healthy"}
 
-# CORS - mirror the permissive dev settings used previously
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -29,7 +42,6 @@ app.add_middleware(
     max_age=settings.CORS_MAX_AGE,
 )
 
-# Register routers
 app.include_router(computers_router, prefix="/api/computers")
 app.include_router(warranty_router, prefix="/api")
 app.include_router(dhcp_router, prefix="/api/dhcp")
@@ -41,51 +53,47 @@ app.include_router(debug_router, prefix="/api/debug")
 app.include_router(mobiles_router, prefix="/api/mobiles")
 app.include_router(iphone_catalog_router, prefix="/api/iphone-catalog")
 
-# Register error handlers
 register_exception_handlers(app)
-
 
 @app.on_event("startup")
 async def startup_event():
-    # Placeholder for any startup tasks (connections, warmups)
-    print("🚀 FastAPI startup event")
+    # Removidos emojis para evitar UnicodeEncodeError no Windows Service
+    print("FastAPI startup event")
     try:
         statuses = test_all_connections()
-        print("🔌 Connection status summary:")
+        print("Connection status summary:")
         for k, v in statuses.items():
             print(f" - {k}: {v}")
     except Exception as e:
-        print(f"⚠️ Error during connection tests at startup: {e}")
+        print(f"Error during connection tests at startup: {e}")
 
-    # Try to import legacy backend.app to reuse its managers (dhcp_manager, sync_service)
     try:
-        import importlib
+        # Tenta importar o módulo legacy
         mod = importlib.import_module('backend.app')
 
-        # populate connections module so require_dhcp_manager / require_sync_service succeed
         from . import connections as _connections
         if getattr(mod, 'dhcp_manager', None) and getattr(_connections, 'dhcp_manager', None) is None:
             _connections.dhcp_manager = getattr(mod, 'dhcp_manager')
-            print('🔁 Loaded dhcp_manager from backend.app')
+            print('Loaded dhcp_manager from backend.app')
+            
         if getattr(mod, 'sync_service', None) and getattr(_connections, 'sync_service', None) is None:
             _connections.sync_service = getattr(mod, 'sync_service')
-            print('🔁 Loaded sync_service from backend.app')
+            print('Loaded sync_service from backend.app')
     except Exception as e:
-        # don't fail startup; log reason for easier debugging
-        print(f"ℹ️ Could not import legacy backend.app managers: {e}")
+        # Caractere 'i' comum no lugar do emoji para evitar erro de encoding
+        print(f"(i) Could not import legacy backend.app managers: {e}")
 
-    # Iniciar scheduler de detecção de usuários (seg-sex, 7h-19h)
     try:
         from .managers.user_detect_service import user_detect_scheduler
         user_detect_scheduler.start()
-        print('🕐 UserDetectScheduler iniciado (seg-sex, 7h-19h, a cada 1h)')
+        print('UserDetectScheduler iniciado (seg-sex, 7h-19h, a cada 1h)')
     except Exception as e:
-        print(f'⚠️ Erro ao iniciar UserDetectScheduler: {e}')
+        print(f'Erro ao iniciar UserDetectScheduler: {e}')
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    print(" FastAPI shutdown event")
+    print("FastAPI shutdown event")
     try:
         from .managers.user_detect_service import user_detect_scheduler
         user_detect_scheduler.stop()
@@ -95,5 +103,5 @@ async def shutdown_event():
 
 if __name__ == "__main__":
     import uvicorn
-    # Use fully-qualified module path so running from repository root works
+    # Mantendo a porta 42057 do seu .bat
     uvicorn.run("backend.fastapi_app.main:app", host="0.0.0.0", port=42057, reload=True)

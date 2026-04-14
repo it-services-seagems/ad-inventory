@@ -534,15 +534,22 @@ const ComputerDetail = () => {
   const handleAssignUser = () => {
     if (!selectedUser) return
 
-    // Para modo manual, usar o nome digitado diretamente
+    const email = selectedUser.email_corporativo || selectedUser.email
+
+    // Modo manual: exigir email corporativo válido
     if (selectedSource === 'manual') {
-      // Criar um objeto funcionário simplificado para modo manual
-      const manualUser = {
-        ...selectedUser,
-        email_corporativo: 'manual@entrada.local'
+      if (!email) {
+        showToast('Funcionário não possui email corporativo cadastrado', 'error')
+        return
       }
-      
-      // Mostrar confirmação
+
+      if (!isEmailValido(email)) {
+        showToast('Email deve ser do domínio @seagems.com.br ou @sapura.com.br', 'error')
+        return
+      }
+
+      const manualUser = { ...selectedUser, email_corporativo: email }
+
       setConfirmModal({
         isOpen: true,
         type: 'info',
@@ -553,20 +560,17 @@ const ComputerDetail = () => {
       return
     }
 
-    // Validar email corporativo para modo busca
-    const email = selectedUser.email_corporativo || selectedUser.email
+    // Modo busca: também exigir email corporativo válido
     if (!email) {
       showToast('Funcionário não possui email corporativo cadastrado', 'error')
       return
     }
 
-    const emailLower = email.toLowerCase()
-    if (!emailLower.includes('@seagems') && !emailLower.includes('@sapura')) {
-      showToast('Email deve ser do domínio @seagems ou @sapura', 'error')
+    if (!isEmailValido(email)) {
+      showToast('Email deve ser do domínio @seagems.com.br ou @sapura.com.br', 'error')
       return
     }
 
-    // Mostrar confirmação antes de vincular
     setConfirmModal({
       isOpen: true,
       type: 'info',
@@ -669,7 +673,7 @@ const ComputerDetail = () => {
   const isEmailValido = (email) => {
     if (!email) return false
     const emailLower = email.toLowerCase()
-    return emailLower.includes('@seagems') || emailLower.includes('@sapura')
+    return emailLower.endsWith('@seagems.com.br') || emailLower.endsWith('@sapura.com.br') || emailLower.includes('@sapura')
   }
 
   // Função para buscar funcionários do Corpore
@@ -1603,7 +1607,9 @@ const ComputerDetail = () => {
                     funcionarios.map(funcionario => {
                       const email = funcionario.email_corporativo || funcionario.email
                       const emailValido = isEmailValido(email)
-                      const podeVincular = !funcionario.demitido && emailValido
+                      const isDemitido = funcionario.demitido
+                      // Só permitir vincular se não for demitido E tiver email corporativo válido
+                      const podeVincular = !isDemitido && emailValido
                       const userId = funcionario.email_corporativo || funcionario.email || funcionario.nome
                       
                       return (
@@ -1628,8 +1634,7 @@ const ComputerDetail = () => {
                               : selectedUser?.id === userId
                                 ? 'border-blue-500 bg-blue-50 cursor-pointer'
                                 : 'border-gray-200 hover:border-gray-300 cursor-pointer'
-                          }`}
-                        >
+                          }`}>
                           <div className="flex justify-between items-start">
                             <div className="flex-1">
                               <div className="font-medium text-gray-900">
@@ -1647,7 +1652,7 @@ const ComputerDetail = () => {
                               <div className={`text-sm ${!emailValido ? 'text-red-600' : 'text-gray-600'}`}>
                                 {email || 'Sem email corporativo'}
                                 {!emailValido && email && (
-                                  <span className="ml-2 text-xs text-orange-600">(Deve ser @seagems ou @sapura)</span>
+                                  <span className="ml-2 text-xs text-orange-600">(Deve ser @seagems.com.br ou @sapura.com.br)</span>
                                 )}
                               </div>
                               <div className="text-xs text-gray-500">
